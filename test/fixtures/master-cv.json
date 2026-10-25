@@ -1,0 +1,59 @@
+{
+  "name": "Dana TODO-last-name",
+  "headline": "Automation & AI Agent Developer",
+  "location": "Ramat Gan, Israel",
+  "summary": "TODO: 2-3 sentences in your own words. Automation and AI agent developer with 5+ years at Acme Health, owning WhatsApp automation for a large healthcare network, now moving toward full-stack, production-grade software development.",
+  "skills": [
+    { "category": "Languages", "items": ["JavaScript (ES5 through modern)", "TODO: TypeScript if you use it"] },
+    { "category": "Integrations", "items": ["REST APIs", "SOAP", "JSON", "XML"] },
+    { "category": "AI", "items": ["LLM-powered support agents", "Knowledge-base grounding", "Prompt engineering"] },
+    { "category": "Web (personal projects)", "items": ["React", "Vite", "Node.js", "SQLite", "Tauri"] },
+    { "category": "Platforms", "items": ["Acme Health", "WhatsApp Business messaging"] }
+  ],
+  "experience": [
+    {
+      "id": "acme",
+      "company": "Acme Health",
+      "role": "Automation and AI Agent Developer",
+      "start": "TODO (YYYY-MM)",
+      "highlights": [
+        { "id": "acme-northwind-owner", "text": "Sole developer of WhatsApp automation for Northwind Clinics, the company's largest account, for four years", "tags": ["ownership", "healthcare"] },
+        { "id": "acme-booking", "text": "Built appointment-booking flows with date/time slot pagination on top of SOAP and REST integrations", "tags": ["integrations"] },
+        { "id": "acme-screening", "text": "Built Hebrew-language health screening flows: family medical history intake and risk-assessment scoring logic", "tags": ["healthcare", "logic"] },
+        { "id": "acme-llm-agents", "text": "Developed LLM-powered support agents grounded in a knowledge base, including diagnosing retrieval failures", "tags": ["ai"] },
+        { "id": "acme-audit", "text": "Audited bot scripts with thousands of nodes to find duplicate intents and routing bugs", "tags": ["quality"] },
+        { "id": "acme-es5", "text": "Wrote ES5-compatible JavaScript within strict platform constraints", "tags": ["javascript"] }
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "ticket-router",
+      "name": "Ticket Router",
+      "stack": ["TypeScript", "Node.js", "SQLite", "Claude API"],
+      "highlights": [
+        { "id": "ticket-router-pipeline", "text": "Multi-source job discovery agent: ATS adapters, deterministic filters, cross-source dedupe and LLM scoring with structured outputs" }
+      ]
+    },
+    {
+      "id": "photo-sorter",
+      "name": "Photo Sorter",
+      "stack": ["React", "Vite", "Node.js", "SQLite", "Tauri"],
+      "highlights": [
+        { "id": "photo-sorter-what", "text": "TODO: one line on what it does and the hardest problem you solved" }
+      ]
+    }
+  ],
+  "education": [
+    { "institution": "The Open University of Israel", "degree": "Computer Science (TODO: degree and year)" }
+  ],
+  "languages": [
+    { "language": "Hebrew", "level": "Native" },
+    { "language": "English", "level": "Professional" },
+    { "language": "Russian", "level": "Fluent" }
+  ],
+  "links": {
+    "github": "TODO",
+    "linkedin": "TODO"
+  }
+}

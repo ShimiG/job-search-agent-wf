@@ -1,0 +1,18 @@
+[
+  {
+    "id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "text": "Integrations Developer",
+    "hostedUrl": "https://jobs.lever.co/beta/a1b2c3d4-0000-4000-8000-000000000001",
+    "applyUrl": "https://jobs.lever.co/beta/a1b2c3d4-0000-4000-8000-000000000001/apply",
+    "createdAt": 1760000000000,
+    "workplaceType": "hybrid",
+    "categories": { "location": "Herzliya", "allLocations": ["Herzliya", "Tel Aviv"], "commitment": "Full-time", "team": "Platform" },
+    "descriptionPlain": "Join our integrations team.",
+    "description": "<div>Join our integrations team.</div>",
+    "lists": [
+      { "text": "Requirements", "content": "<li>Node.js</li><li>SOAP and REST APIs</li>" },
+      { "text": "Nice to have", "content": "<li>Hebrew</li>" }
+    ],
+    "additionalPlain": "We offer a hybrid model."
+  }
+]

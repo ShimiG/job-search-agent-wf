@@ -1,0 +1,18 @@
+[
+  {
+    "uid": "F6.A12",
+    "name": "מפתח/ת אוטומציה",
+    "department": "R&D",
+    "employment_type": "Full-time",
+    "experience_level": "Mid-level",
+    "workplace_type": "Hybrid",
+    "time_updated": "2026-10-11T07:30:00Z",
+    "url_comeet_hosted_page": "https://www.comeet.com/jobs/epsilon/A1.B2C/automation-developer/F6.A12",
+    "url_active_page": "https://epsilon.co.il/careers/?comeet_pos=F6.A12",
+    "location": { "name": "Holon", "city": "Holon", "country": "IL", "is_remote": false },
+    "details": [
+      { "name": "Requirements", "value": "<ul><li>שנתיים ניסיון ב-JavaScript</li><li>עבודה עם REST</li></ul>", "order": 2 },
+      { "name": "Description", "value": "<p>אנחנו מחפשים מפתח/ת אוטומציה לצוות הבוטים שלנו, עבודה עם מערכות שיחה ו-WhatsApp.</p>", "order": 1 }
+    ]
+  }
+]

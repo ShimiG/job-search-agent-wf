@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Beta – Integrations Developer</title></head><body>
+<form id="f">
+  <div class="application-question"><div class="application-label">Full name<span class="required">✱</span></div><div class="application-field"><input name="name" type="text" required></div></div>
+  <div class="application-question"><div class="application-label">Email<span class="required">✱</span></div><div class="application-field"><input name="email" type="email" required></div></div>
+  <div class="application-question"><div class="application-label">Phone</div><div class="application-field"><input name="phone" type="text"></div></div>
+  <div class="application-question"><div class="application-label">Current company</div><div class="application-field"><input name="org" type="text"></div></div>
+  <div class="application-question"><div class="application-label">LinkedIn URL</div><div class="application-field"><input name="urls[LinkedIn]" type="text"></div></div>
+  <div class="application-question"><div class="application-label">Resume/CV<span class="required">✱</span></div><div class="application-field"><input name="resume" type="file" required></div></div>
+  <div class="application-question"><div class="application-label">Do you require visa sponsorship?<span class="required">✱</span></div>
+    <div class="application-field"><label><input type="radio" name="sponsorship" value="yes" required> Yes</label><label><input type="radio" name="sponsorship" value="no"> No</label></div></div>
+  <div class="application-question"><div class="application-label">Additional information</div><div class="application-field"><textarea name="comments"></textarea></div></div>
+  <button type="submit">Submit application</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  if (!f.checkValidity()) return;
+  const data = {};
+  for (const el of f.elements) if (el.name && (el.type !== 'radio' || el.checked)) data[el.name] = el.type === 'file' ? (el.files[0] && el.files[0].name) : el.value;
+  await fetch('/submit', { method: 'POST', body: JSON.stringify(data) });
+  location.href = '/thanks';
+});
+</script></body></html>

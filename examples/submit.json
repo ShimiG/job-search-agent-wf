@@ -1,0 +1,35 @@
+{
+  "autoSubmit": false,
+  "autoSubmitModelAnswers": "none",
+  "maxPerCompanyPer30Days": 2,
+  "maxPerRun": 5,
+  "assistTimeoutMinutes": 20,
+  "browserPath": "",
+
+  "profile": {
+    "firstName": "",
+    "lastName": "",
+    "email": "",
+    "phone": "",
+    "city": "",
+    "country": "Israel",
+    "linkedin": "",
+    "github": "",
+    "website": ""
+  },
+
+  "answers": [
+    { "id": "work-auth-israel", "match": ["authorized to work", "legally authorized", "right to work", "work permit"], "locations": ["israel", "ישראל", "tel aviv", "remote"], "answer": "Yes" },
+    { "id": "sponsorship-israel", "match": ["sponsorship", "visa"], "locations": ["israel", "ישראל", "tel aviv"], "answer": "No" },
+    { "id": "work-auth-abroad", "match": ["authorized to work", "legally authorized", "right to work", "sponsorship", "visa", "work permit"], "answer": "" },
+    { "id": "relocation", "match": ["relocate", "relocation"], "answer": "" },
+    { "id": "notice-period", "match": ["notice period", "when can you start", "start date", "earliest start"], "answer": "" },
+    { "id": "salary", "match": ["salary", "compensation expectation", "expected compensation", "ציפיות שכר"], "answer": "" },
+    { "id": "heard-about", "match": ["how did you hear", "where did you hear", "how did you find"], "answer": "Company careers page" },
+    { "id": "languages-hebrew", "match": ["hebrew"], "answer": "Native" },
+    { "id": "languages-english", "match": ["english proficiency", "level of english"], "answer": "Professional" }
+  ],
+
+  "demographics": "decline",
+  "consentToPrivacyPolicies": false
+}

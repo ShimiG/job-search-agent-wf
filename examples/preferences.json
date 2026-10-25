@@ -1,0 +1,56 @@
+{
+  "targetRoles": [
+    "Backend or full-stack developer",
+    "Integration or automation engineer"
+  ],
+  "notes": "In your own words: what you want next and what to avoid. Claude reads this when scoring jobs.",
+  "titleKeywords": {
+    "include": [
+      "developer", "engineer", "programmer", "automation", "integration", "integrations", "ai", "llm", "agent", "agents",
+      "full stack", "fullstack", "backend", "back end", "software", "solutions", "implementation", "consultant",
+      "מפתח", "מפתחת", "מתכנת", "מתכנתת", "מהנדס", "מהנדסת", "אוטומציה", "אינטגרציה", "פול סטאק"
+    ],
+    "exclude": [
+      "hardware", "firmware", "embedded", "android", "ios", "sales", "account executive", "account manager",
+      "recruiter", "talent", "marketing", "מכירות"
+    ]
+  },
+  "seniority": {
+    "exclude": [
+      "principal", "staff", "director", "head of", "vp", "chief", "engineering manager",
+      "intern", "internship", "student", "סטודנט", "סטודנטית", "ראש צוות"
+    ]
+  },
+  "locations": {
+    "allow": [
+      "israel", "ישראל", "tel aviv", "תל אביב", "holon", "חולון", "petah tikva", "petach tikva", "פתח תקווה",
+      "ramat gan", "רמת גן", "givatayim", "גבעתיים", "bnei brak", "בני ברק", "bat yam", "בת ים",
+      "rishon lezion", "rishon le zion", "ראשון לציון", "herzliya", "הרצליה", "rehovot", "רחובות",
+      "ness ziona", "נס ציונה", "airport city", "or yehuda", "אור יהודה", "kfar saba", "כפר סבא",
+      "raanana", "ra'anana", "רעננה", "hod hasharon", "הוד השרון", "rosh haayin", "ראש העין",
+      "central district", "center", "מרכז", "gush dan", "גוש דן"
+    ],
+    "allowRemote": true,
+    "allowOnsite": true,
+    "remoteExclude": [
+      "us only", "usa only", "united states", "usa", "canada", "north america", "latam", "apac", "uk only", "india"
+    ],
+    "allowUnknown": true
+  },
+  "languages": {
+    "postingLanguages": ["en", "he", "ru"],
+    "blockRequired": ["german", "french", "dutch", "spanish", "italian", "arabic"]
+  },
+  "excludeCompanies": [],
+  "employmentTypes": {
+    "exclude": ["internship", "part time", "part-time", "freelance", "משרה חלקית"]
+  },
+  "maxAgeDays": 30,
+  "scoring": {
+    "threshold": 65,
+    "partialThreshold": 55,
+    "maxJobsPerRun": 40,
+    "concurrency": 3,
+    "maxAttempts": 3
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "contact": {
+    "email": "you@example.com",
+    "phone": "+972-50-000-0000"
+  },
+  "languages": {
+    "cv": "en",
+    "coverLetter": "match"
+  },
+  "cv": {
+    "maxBulletsPerRole": 5,
+    "maxProjects": 2,
+    "maxSkills": 14,
+    "targetPages": 1
+  },
+  "coverLetter": {
+    "maxWords": 280,
+    "signOff": {
+      "en": "Best regards",
+      "he": "בברכה",
+      "ru": "С уважением"
+    },
+    "style": "Direct and specific. Short sentences. Confident without hype. Sounds like a real person, not a template.",
+    "avoid": [
+      "I am writing to apply",
+      "passionate",
+      "dynamic",
+      "team player",
+      "fast-paced environment",
+      "hit the ground running"
+    ]
+  },
+  "pdf": {
+    "enabled": true,
+    "browserPath": ""
+  },
+  "maxJobsPerRun": 5
+}

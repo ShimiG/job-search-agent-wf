@@ -1,0 +1,9 @@
+{
+  "boards": [],
+  "emailAlerts": {
+    "enabled": false,
+    "mailbox": "INBOX",
+    "sinceDays": 3,
+    "feeds": []
+  }
+}

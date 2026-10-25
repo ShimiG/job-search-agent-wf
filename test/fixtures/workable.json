@@ -1,0 +1,24 @@
+{
+  "name": "Delta Ltd",
+  "description": null,
+  "jobs": [
+    {
+      "title": "Automation Developer",
+      "shortcode": "A1B2C3D4E5",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Operations",
+      "url": "https://apply.workable.com/j/A1B2C3D4E5",
+      "shortlink": "https://apply.workable.com/j/A1B2C3D4E5",
+      "application_url": "https://apply.workable.com/j/A1B2C3D4E5/apply",
+      "published_on": "2026-10-05",
+      "created_at": "2026-10-05",
+      "country": "Israel",
+      "city": "Petah Tikva",
+      "state": "Center District",
+      "locations": [{ "country": "Israel", "countryCode": "IL", "city": "Petah Tikva", "region": "Center District", "hidden": false }],
+      "description": "<p>Build automations with JavaScript and APIs.</p>"
+    }
+  ]
+}

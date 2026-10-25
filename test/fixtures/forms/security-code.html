@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Apply – Acme</title>
+<style>.code input { width: 2em; text-align: center; }</style></head><body>
+<!-- After the first Submit, asks for an emailed 8-character security code in one-character boxes
+     that move focus by themselves, like Greenhouse. Only the right code completes the application. -->
+<h1>Agent Platform Engineer</h1>
+<form id="application-form" onsubmit="return go(event)">
+  <div><label for="first_name">First Name *</label><input id="first_name" name="first_name" required></div>
+  <div><label for="last_name">Last Name *</label><input id="last_name" name="last_name" required></div>
+  <div><label for="email">Email *</label><input id="email" type="email" name="email" required></div>
+  <div id="code" hidden>
+    <p>We've sent a security code to your email. Enter the 8-character code to submit your application.</p>
+    <div class="code"></div>
+    <p id="code-error"></p>
+  </div>
+  <button type="submit">Submit application</button>
+</form>
+<script>
+const boxes = document.querySelector('.code');
+for (let i = 0; i < 8; i++) {
+  const b = document.createElement('input');
+  b.maxLength = 1;
+  b.setAttribute('aria-label', 'Character ' + (i + 1));
+  b.addEventListener('input', () => { if (b.value && b.nextElementSibling) b.nextElementSibling.focus(); });
+  boxes.appendChild(b);
+}
+async function go(e) {
+  e.preventDefault();
+  const section = document.getElementById('code');
+  if (section.hidden) { section.hidden = false; return false; }
+  const code = [...boxes.children].map((b) => b.value).join('');
+  if (code !== 'X7KP2MQA') { document.getElementById('code-error').textContent = 'Incorrect code'; return false; }
+  const f = document.getElementById('application-form');
+  await fetch('/submit', { method: 'POST', body: JSON.stringify({ email: f.email.value, code }) });
+  history.pushState({}, '', '/confirmation');
+  document.body.innerHTML = '<h1>Thank you for applying!</h1>';
+  return false;
+}
+</script></body></html>

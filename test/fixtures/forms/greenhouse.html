@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Apply – Acme</title></head><body>
+<h1>AI Automation Engineer</h1>
+<form id="application-form" onsubmit="return go(event)">
+  <div class="field"><label for="first_name">First Name<span>*</span></label><input id="first_name" name="first_name" required></div>
+  <div class="field"><label for="last_name">Last Name *</label><input id="last_name" name="last_name" required></div>
+  <div class="field"><label for="email">Email *</label><input id="email" type="email" name="email" required></div>
+  <div class="field"><label for="phone">Phone</label><input id="phone" type="tel" name="phone"></div>
+  <div class="field"><label for="resume">Resume/CV *</label><input id="resume" type="file" name="resume" style="display:none" required>
+    <button type="button" onclick="document.getElementById('resume').click()">Attach</button></div>
+  <div class="field"><label for="cover_letter">Cover Letter</label><input id="cover_letter" type="file" name="cover_letter" style="display:none"></div>
+  <div class="field"><label for="q_linkedin">LinkedIn Profile</label><input id="q_linkedin" name="q_linkedin"></div>
+  <div class="field"><label for="q_auth">Are you legally authorized to work in Israel? *</label>
+    <select id="q_auth" name="q_auth" required><option value="">Select...</option><option value="1">Yes</option><option value="0">No</option></select></div>
+  <div class="field"><label for="q_why">Why do you want to work at Acme? *</label><textarea id="q_why" name="q_why" required maxlength="1000"></textarea></div>
+  <div class="field"><label for="q_salary">What are your salary expectations?</label><input id="q_salary" name="q_salary"></div>
+  <div class="field"><label for="gender">Gender</label>
+    <select id="gender" name="gender"><option value="">Select...</option><option>Male</option><option>Female</option><option>Decline To Self Identify</option></select></div>
+  <div class="field"><label><input type="checkbox" id="privacy" name="privacy" required> I agree to the privacy policy *</label></div>
+  <button type="submit">Submit Application</button>
+</form>
+<script>
+async function go(e) {
+  e.preventDefault();
+  const f = document.getElementById('application-form');
+  if (!f.checkValidity()) { document.title = 'invalid'; return false; }
+  const data = {};
+  for (const el of f.elements) if (el.name) data[el.name] = el.type === 'file' ? (el.files[0] && el.files[0].name) : el.type === 'checkbox' ? el.checked : el.value;
+  await fetch('/submit', { method: 'POST', body: JSON.stringify(data) });
+  history.pushState({}, '', '/confirmation');
+  document.body.innerHTML = '<h1>Thank you for applying!</h1>';
+  return false;
+}
+</script></body></html>

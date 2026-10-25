@@ -1,0 +1,29 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "6f1d0000-aaaa-4bbb-8ccc-000000000001",
+      "title": "Full Stack Engineer",
+      "location": "Remote",
+      "secondaryLocations": [{ "location": "Israel" }],
+      "department": "Engineering",
+      "team": "Core",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Remote",
+      "employmentType": "FullTime",
+      "descriptionPlain": "React, Node, SQLite. Ship features end to end.",
+      "descriptionHtml": "<p>React, Node, SQLite.</p>",
+      "publishedAt": "2026-10-12T08:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/gamma/6f1d0000-aaaa-4bbb-8ccc-000000000001",
+      "applyUrl": "https://jobs.ashbyhq.com/gamma/6f1d0000-aaaa-4bbb-8ccc-000000000001/application"
+    },
+    {
+      "id": "6f1d0000-aaaa-4bbb-8ccc-000000000002",
+      "title": "Hidden Role",
+      "location": "Tel Aviv",
+      "isListed": false,
+      "jobUrl": "https://jobs.ashbyhq.com/gamma/6f1d0000-aaaa-4bbb-8ccc-000000000002"
+    }
+  ]
+}

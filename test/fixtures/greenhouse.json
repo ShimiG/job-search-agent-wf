@@ -1,0 +1,26 @@
+{
+  "jobs": [
+    {
+      "id": 7012345,
+      "title": "AI Automation Engineer",
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/7012345",
+      "location": { "name": "Tel Aviv, Israel" },
+      "updated_at": "2026-10-10T09:00:00-04:00",
+      "first_published": "2026-10-08T09:00:00-04:00",
+      "company_name": "Acme",
+      "content": "&lt;p&gt;We build &lt;strong&gt;LLM agents&lt;/strong&gt; for customer support.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;3+ years JavaScript&lt;/li&gt;&lt;li&gt;REST integrations&lt;/li&gt;&lt;/ul&gt;",
+      "departments": [{ "name": "R&D" }],
+      "offices": [{ "name": "Tel Aviv", "location": "Tel Aviv, Israel" }],
+      "metadata": null
+    },
+    {
+      "id": 7012346,
+      "title": "Principal Software Engineer",
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/7012346",
+      "location": { "name": "Remote - US" },
+      "updated_at": "2026-10-01T09:00:00Z",
+      "content": "&lt;p&gt;Lead architecture.&lt;/p&gt;"
+    }
+  ],
+  "meta": { "total": 2 }
+}
