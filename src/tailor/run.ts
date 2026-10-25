@@ -108,38 +108,104 @@ export function applicationDir(outDir: string, job: Pick<JobRow, 'id' | 'company
   return path.join(outDir, `${job.id}-${slug}`, `v${version}`);
 }
 
-/** Writes HTML (always), PDF (if enabled), content.json and report.md into `dir`. */
+type Shrink = { what: string; apply?: (c: TailoredContent) => TailoredContent | null; compact?: true };
+
+const capBullets = (c: TailoredContent, max: number, which: 'recent' | 'older'): TailoredContent | null => {
+  let changed = false;
+  const experience = c.experience.map((x, i) => {
+    if ((which === 'recent') !== (i === 0) || x.bullets.length <= max) return x;
+    changed = true;
+    return { ...x, bullets: x.bullets.slice(0, max) };
+  });
+  return changed ? { ...c, experience } : null;
+};
+
+/**
+ * Ways to shorten a CV, least valuable first. Each keeps the writer's own choices and order (strongest
+ * bullet first), so trimming never adds or rewords anything: it only leaves out the weakest parts. A
+ * project goes last: it's often the best evidence for the kind of role you're applying to.
+ */
+const SHRINK: Shrink[] = [
+  { what: 'skills cut to 10', apply: (c) => (c.skills.length > 10 ? { ...c, skills: c.skills.slice(0, 10) } : null) },
+  { what: 'one project instead of two', apply: (c) => (c.projects.length > 1 ? { ...c, projects: c.projects.slice(0, 1) } : null) },
+  { what: 'older roles cut to 2 bullets', apply: (c) => capBullets(c, 2, 'older') },
+  {
+    what: 'summary cut to its first two sentences',
+    apply: (c) => {
+      const sentences = c.summary.split(/(?<=[.!?])\s+/);
+      return sentences.length > 2 ? { ...c, summary: sentences.slice(0, 2).join(' ') } : null;
+    },
+  },
+  {
+    what: 'project cut to 1 bullet',
+    apply: (c) => (c.projects.some((p) => p.bullets.length > 1) ? { ...c, projects: c.projects.map((p) => ({ ...p, bullets: p.bullets.slice(0, 1) })) } : null),
+  },
+  { what: 'most recent role cut to 4 bullets', apply: (c) => capBullets(c, 4, 'recent') },
+  { what: 'older roles cut to 1 bullet', apply: (c) => capBullets(c, 1, 'older') },
+  { what: 'most recent role cut to 3 bullets', apply: (c) => capBullets(c, 3, 'recent') },
+  { what: 'smaller type and margins', compact: true },
+  { what: 'projects left out', apply: (c) => (c.projects.length ? { ...c, projects: [] } : null) },
+];
+
+/**
+ * Writes HTML (always), PDF (if enabled), content.json and report.md into `dir`. With `fit`, a CV over
+ * cv.targetPages is trimmed (see SHRINK) and finally set in compact type until it fits. Returns the
+ * content as written, which may be the trimmed version.
+ */
 export async function writeArtifacts(
   dir: string,
   content: TailoredContent,
   report: VerificationReport,
   deps: Pick<TailorDeps, 'cv' | 'cfg' | 'pdf'>,
   today: Date,
-): Promise<string[]> {
+  opts: { fit?: boolean } = {},
+): Promise<{ files: string[]; content: TailoredContent }> {
   mkdirSync(dir, { recursive: true });
   const names = documentNames(deps.cv.name);
-  const cvHtml = renderCvHtml(content, deps.cv, deps.cfg);
   const letterHtml = renderLetterHtml(content, deps.cv, deps.cfg, today);
-  const files = [writeText(dir, `${names.cv}.html`, cvHtml), writeText(dir, `${names.letter}.html`, letterHtml)];
+  const target = deps.cfg.cv.targetPages;
+  let fitted = content;
+  let compact = false;
+  let cvHtml = renderCvHtml(fitted, deps.cv, deps.cfg);
+  const files = [writeText(dir, `${names.letter}.html`, letterHtml)];
+  report.issues = report.issues.filter((i) => i.where !== 'layout');
   if (deps.pdf) {
     const cvPdf = path.join(dir, `${names.cv}.pdf`);
     const letterPdf = path.join(dir, `${names.letter}.pdf`);
-    const { pages } = await deps.pdf.render(cvHtml, cvPdf);
+    let { pages } = await deps.pdf.render(cvHtml, cvPdf);
+    const trimmed: string[] = [];
+    if (opts.fit) {
+      for (const step of SHRINK) {
+        if (pages <= target) break;
+        if (step.compact) compact = true;
+        else {
+          const next = step.apply!(fitted);
+          if (!next) continue;
+          fitted = next;
+        }
+        trimmed.push(step.what);
+        cvHtml = renderCvHtml(fitted, deps.cv, deps.cfg, { compact });
+        ({ pages } = await deps.pdf.render(cvHtml, cvPdf));
+      }
+    }
     await deps.pdf.render(letterHtml, letterPdf);
     files.unshift(cvPdf, letterPdf);
     report.cvPages = pages;
-    report.issues = report.issues.filter((i) => i.where !== 'layout');
-    if (pages > deps.cfg.cv.targetPages) {
+    if (trimmed.length) {
+      report.issues.push({ severity: 'warning', where: 'layout', message: `trimmed to fit ${target} page(s): ${trimmed.join(', ')}` });
+    }
+    if (pages > target) {
       report.issues.push({
         severity: 'warning',
         where: 'layout',
-        message: `CV is ${pages} pages (target ${deps.cfg.cv.targetPages}); lower cv.maxBulletsPerRole or cv.maxProjects, or redo with a note`,
+        message: `CV is ${pages} pages (target ${target}); lower cv.maxBulletsPerRole or cv.maxProjects, or redo with a note`,
       });
     }
   }
-  writeText(dir, 'content.json', JSON.stringify(content, null, 2) + '\n');
-  writeText(dir, 'report.md', formatReport(content, report, files));
-  return files;
+  files.splice(files.length - 1, 0, writeText(dir, `${names.cv}.html`, cvHtml));
+  writeText(dir, 'content.json', JSON.stringify(fitted, null, 2) + '\n');
+  writeText(dir, 'report.md', formatReport(fitted, report, files));
+  return { files, content: fitted };
 }
 
 export async function tailorJob(job: JobRow, deps: TailorDeps): Promise<{ app: ApplicationRecord; report: VerificationReport; files: string[] }> {
@@ -147,14 +213,15 @@ export async function tailorJob(job: JobRow, deps: TailorDeps): Promise<{ app: A
   const { content, report } = await produceContent(job, deps);
   const version = (deps.store.latestApplication(job.id)?.version ?? 0) + 1;
   const dir = applicationDir(deps.outDir, job, version);
-  const files = await writeArtifacts(dir, content, report, deps, now);
+  const written = await writeArtifacts(dir, content, report, deps, now, { fit: true });
+  const files = written.files;
 
   const app = deps.store.saveApplication({
     jobId: job.id,
     dir,
     cvLanguage: content.cvLanguage,
     letterLanguage: content.letterLanguage,
-    content,
+    content: written.content,
     verification: report,
     feedback: job.tailorFeedback,
     model: deps.model ?? null,
@@ -226,7 +293,8 @@ export async function rerender(jobId: number, deps: Pick<TailorDeps, 'store' | '
     llmChecked: false,
     revised: false,
   };
-  const files = await writeArtifacts(app.dir, content, report, deps, today);
+  // Your hand edits are kept as written: no trimming to fit.
+  const { files } = await writeArtifacts(app.dir, content, report, deps, today);
   deps.store.updateApplicationContent(app.id, content, report);
   return { app, report, files };
 }

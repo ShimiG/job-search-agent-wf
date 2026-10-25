@@ -62,13 +62,24 @@ function contactLine(cv: MasterCv, cfg: TailorConfig): string {
   return parts.map((p) => `<span>${escapeHtml(p)}</span>`).join('');
 }
 
-export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: TailorConfig): string {
+/** Smaller type and margins: the last resort for fitting a CV on its target page count. */
+const COMPACT_CSS = `
+@page { size: A4; margin: 11mm 14mm; }
+body { font-size: 9.7pt; line-height: 1.33; }
+h2 { margin: 10px 0 4px; }
+.entry { margin-bottom: 5px; }
+p { margin: 0 0 5px; }
+`;
+
+export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: TailorConfig, opts: { compact?: boolean } = {}): string {
   const lang = content.cvLanguage;
   const L = LABELS[lang];
   const e = escapeHtml;
   const bullets = (items: Array<{ text: string }>) => `<ul>${items.map((b) => `<li>${e(b.text)}</li>`).join('')}</ul>`;
 
+  // A role or project removed from your CV since this version was tailored is left out, not a crash.
   const experience = content.experience
+    .filter((x) => cv.experience.some((c) => c.id === x.id))
     .map((x) => {
       const entry = cv.experience.find((c) => c.id === x.id)!;
       return `<div class="entry">
@@ -80,6 +91,7 @@ export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: Tailor
     .join('\n');
 
   const projects = content.projects
+    .filter((x) => cv.projects.some((c) => c.id === x.id))
     .map((x) => {
       const p = cv.projects.find((c) => c.id === x.id)!;
       return `<div class="entry">
@@ -97,7 +109,7 @@ export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: Tailor
 
   return `<!doctype html>
 <html lang="${lang}" dir="${dir(lang)}">
-<head><meta charset="utf-8"><title>${e(cv.name)} – ${L.cv}</title><style>${BASE_CSS}</style></head>
+<head><meta charset="utf-8"><title>${e(cv.name)} – ${L.cv}</title><style>${BASE_CSS}${opts.compact ? COMPACT_CSS : ''}</style></head>
 <body>
 <header>
   <h1>${e(cv.name)}</h1>

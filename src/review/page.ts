@@ -143,7 +143,8 @@ export const PAGE = String.raw`<!doctype html>
   var ui = {
     tab: 'shortlist', filter: 'all', data: null, below: null, hash: '',
     picked: new Set(), approve: new Set(), open: new Set(), notes: {}, redoOpen: new Set(), busy: false,
-    cv: null, cvPreview: null, cvBusy: false
+    cv: null, cvPreview: null, cvBusy: false,
+    linkOpen: new Set(), links: {}, linkBusy: null
   };
   var $ = function (id) { return document.getElementById(id); };
   try { var saved = localStorage.getItem('mode'); if (saved) $('mode').value = saved; } catch (e) {}
@@ -331,6 +332,57 @@ export const PAGE = String.raw`<!doctype html>
     return wrap;
   }
 
+  // A link to the company's own page for the job. What it does depends on where the job is:
+  // on the Shortlist it reads the full posting and tailors from it; once the application is written
+  // (Ready to send, stuck in Sending) it's simply where to apply, so it goes to the Submitter.
+  var LINK = {
+    tailor: { button: 'Fetch and tailor', busy: 'Reading the page, then scoring and tailoring…',
+      note: "The company's own page for this job (from LinkedIn's Apply button, a careers site…). It's read in a hidden browser, the full posting is copied from it and scored, and your application is tailored from it. About 2–3¢ plus tailoring." },
+    ready: { button: 'Approve and apply there', busy: 'Checking the page, then sending…',
+      note: "Where to apply for this job (from LinkedIn's Apply button, a careers site…). Your application is already written, so this approves it and the Submitter applies on that page. The page is checked first: it must be open and about this job. No cost." },
+    sending: { button: 'Apply there', busy: 'Checking the page, then sending…',
+      note: "Where to apply for this job (from LinkedIn's Apply button, a careers site…). The Submitter applies on that page with your written application. The page is checked first: it must be open and about this job. No cost." }
+  };
+  function linkBox(j, stage) {
+    var t = LINK[stage];
+    var wrap = el('div');
+    if (ui.linkBusy === j.id) { wrap.appendChild(working(t.busy)); return wrap; }
+    if (!ui.linkOpen.has(j.id)) {
+      var r = el('div', 'row');
+      r.appendChild(btn(stage === 'tailor' ? 'Paste application link' : 'Paste where to apply', 'small', function () { ui.linkOpen.add(j.id); render(); }));
+      wrap.appendChild(r);
+      return wrap;
+    }
+    wrap.appendChild(el('p', 'note', t.note));
+    var inp = el('input'); inp.type = 'url'; inp.placeholder = 'https://…'; inp.setAttribute('aria-label', 'Application link');
+    inp.value = ui.links[j.id] || '';
+    inp.style.cssText = 'width:100%;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);margin-top:8px';
+    inp.addEventListener('input', function () { ui.links[j.id] = inp.value; });
+    wrap.appendChild(inp);
+    var row = el('div', 'row');
+    row.appendChild(btn(t.button, 'primary small', function () {
+      var url = (ui.links[j.id] || '').trim();
+      if (!url) return toast('Paste the link first.');
+      var force = false;
+      if (stage === 'ready' && j.docs && j.docs.unverified.length) {
+        if (!confirm('This application has claims the fact-check could not verify against your CV:\n\n' + j.docs.unverified.join('\n') + '\n\nSend anyway?')) return;
+        force = true;
+      }
+      ui.linkBusy = j.id; render();
+      post('useLink', { id: j.id, url: url, mode: $('mode').value, force: force }).then(function (r) {
+        if (r.ok) {
+          ui.linkOpen.delete(j.id); delete ui.links[j.id]; ui.picked.delete(j.id); ui.approve.delete(j.id);
+          if (r.stage === 'tailor') { ui.tab = 'tailoring'; toast('Full posting found' + (r.score !== null ? ' (score ' + r.score + ')' : '') + ': tailoring #' + j.id + ' from it.'); }
+          else { ui.tab = 'sending'; toast('Applying on that page (' + r.mode + ' mode).'); }
+        } else if (r.closed) { ui.linkOpen.delete(j.id); toast('That job is no longer accepting applications: removed.'); }
+        else toast('Not used: ' + r.reason + '.');
+      }, fail).finally(function () { ui.linkBusy = null; render(); });
+    }));
+    row.appendChild(btn('Cancel', 'small', function () { ui.linkOpen.delete(j.id); render(); }));
+    wrap.appendChild(row);
+    return wrap;
+  }
+
   // ------------------------------------------------------------ layout
   function renderTabs(d) {
     var nav = $('tabs'); nav.textContent = '';
@@ -428,7 +480,7 @@ export const PAGE = String.raw`<!doctype html>
     if (ui.tab === 'shortlist' || ui.tab === 'below') {
       list = filtered(ui.tab === 'shortlist' ? d.shortlist : (ui.below || []));
       renderToolbar(list, ui.picked);
-      list.forEach(function (j) { root.appendChild(jobCard(j, { select: ui.picked })); });
+      list.forEach(function (j) { root.appendChild(jobCard(j, { select: ui.picked, after: [linkBox(j, 'tailor')] })); });
     } else if (ui.tab === 'tailoring') {
       list = d.tailoring; renderToolbar(list, null);
       list.forEach(function (j) {
@@ -476,6 +528,7 @@ export const PAGE = String.raw`<!doctype html>
         }));
         after.push(row);
         after.push(redoBox(j));
+        after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
         root.appendChild(jobCard(j, { select: ui.approve, tags: tags, extra: extra, after: after, summary: false }));
@@ -519,6 +572,7 @@ export const PAGE = String.raw`<!doctype html>
             post('markApplied', { id: j.id }).then(function () { toast('Recorded #' + j.id + ' as applied.'); }, fail);
           }));
           extra.push(r);
+          extra.push(linkBox(j, 'sending'));
         }
         root.appendChild(jobCard(j, { tags: tags, extra: extra, summary: false, details: false }));
       });

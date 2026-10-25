@@ -96,6 +96,7 @@ function taskBrief(input: DraftInput): string {
     `CV language: ${LANGUAGE_NAMES[input.cvLanguage]}${input.cvLanguage === 'en' ? '' : ' (translate faithfully)'}.`,
     `Cover letter language: ${LANGUAGE_NAMES[input.letterLanguage]}.`,
     `Up to ${cfg.cv.maxBulletsPerRole} bullets per role, ${cfg.cv.maxProjects} projects, ${cfg.cv.maxSkills} skills.`,
+    `The CV must fit on ${cfg.cv.targetPages} A4 page(s), so be selective: the strongest bullets for this job, strongest first in each role, fewer for older roles. Never repeat an achievement that already appears under another role or project (an account or project within the same employer counts as the same work): pick the one place it reads best. Keep the summary to two or three sentences.`,
     `Cover letter: at most ${cfg.coverLetter.maxWords} words in total. Style: ${cfg.coverLetter.style}`,
   ];
   if (cfg.coverLetter.avoid.length) lines.push(`Never use these phrases: ${cfg.coverLetter.avoid.map((a) => `"${a}"`).join(', ')}.`);

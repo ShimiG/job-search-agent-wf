@@ -1,4 +1,5 @@
 import type { Frame, Locator, Page } from 'playwright-core';
+import { textMentionsTitle } from '../llm/posting.ts';
 import { diceSimilarity, normalizeForMatch } from '../util/text.ts';
 import type { FormField, PlannedAnswer } from './schema.ts';
 
@@ -181,12 +182,9 @@ export async function detectConfirmation(page: Page): Promise<string | null> {
  * found by the web lookup, so a careers page for another role is never filled in your name.
  */
 export async function pageMentionsTitle(page: Page, title: string): Promise<boolean> {
-  const words = normalizeForMatch(title).split(' ').filter((w) => w.length >= 3);
-  if (!words.length) return true;
   let text = '';
   for (const frame of page.frames()) text += ' ' + (((await frame.evaluate(String.raw`(() => document.body ? document.body.innerText.slice(0, 20000) : '')()`).catch(() => '')) as string) ?? '');
-  const onPage = new Set(normalizeForMatch(text).split(' '));
-  return words.filter((w) => onPage.has(w)).length / words.length >= 0.6;
+  return textMentionsTitle(text, title);
 }
 
 /** Index of the option that best matches the wanted answer, or -1. */

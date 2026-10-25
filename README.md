@@ -166,6 +166,18 @@ npm run review               # http://127.0.0.1:4100
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Sent** | The last 14 days, with every answer Claude wrote on each form. |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
+
+**Paste a link** to the company's own page for a job (from LinkedIn's Apply button, a careers site…).
+What it does depends on where the job is:
+
+| Where | What happens | Cost |
+|---|---|---|
+| Shortlist | The full posting is read from the page (in a hidden Chrome, so script-built pages work too) and scored, then the application is tailored from it. | about 2–3¢ + tailoring |
+| Ready to send | The page becomes where to apply: the application is approved and the Submitter applies there. | free |
+| Sending (stuck) | The Submitter applies there with the application you already have. | free |
+
+The page must be open and about the same job, or it's refused; a closed one removes the job. LinkedIn,
+Indeed, Glassdoor and ZipRecruiter links are refused: open the job there and paste the company page you land on.
 | **Your CV** | Upload a new CV, see the current one. |
 
 **Run Scout** starts a run from the page. With the LangGraph server up, every step runs there (a
@@ -290,6 +302,10 @@ model to ignore instructions inside them. After changing preferences or your CV,
    again. Anything still unsupported is listed for you, and approving it needs an explicit "send anyway".
 4. **Render.** Employers, titles and dates come straight from your CV. Plain one-column templates (what
    ATS parsers read best) are printed to PDF with Chrome.
+5. **Fit.** A CV longer than `cv.targetPages` (1 by default) is shortened, weakest parts first, and
+   rendered again until it fits: fewer skills, one project, fewer bullets for older roles, a two-sentence
+   summary, fewer bullets for the current role, smaller type, and only then no project. Nothing is
+   reworded; the report says what was trimmed. Versions you edit by hand are never trimmed.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.

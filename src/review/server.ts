@@ -13,6 +13,9 @@ import { applyPicks, applyReview } from '../decisions.ts';
 import { JobStore } from '../db/store.ts';
 import { scoutAgent, sendWithoutReview, submitAgent, tailorAgent } from '../graph/graphs.ts';
 import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
+import { checkApplyPage, postingFromLink } from '../llm/posting.ts';
+import { AnthropicScorer } from '../llm/scorer.ts';
+import { cutoff } from '../pipeline/run.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
 import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts';
@@ -457,6 +460,62 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     const { langgraph: up } = await connection();
     await start('submit', up, [id], { jobIds: [id], mode }, () => submitAgent([id], mode));
     return { found: true, applyUrl: result.applyUrl, cost, mode };
+  },
+
+  /**
+   * A link you paste to the company's application page: read the full posting from it, score it again
+   * on the full text, and tailor the application (again, if it was tailored from an alert's summary).
+   */
+  async useLink(body) {
+    const { id, url, mode, force } = z
+      .object({ id: z.number().int().positive(), url: z.string().trim().min(8).max(2000), mode: Mode, force: z.boolean().default(false) })
+      .parse(body);
+    if (!cvStatus().ready) throw new Error(UPLOAD_CV_FIRST);
+    const job = withStore((store) => store.get(id));
+    if (!job) throw new Error(`#${id}: not found`);
+    if (job.status === 'submitted') throw new Error(`#${id} is already submitted`);
+    const paths = resolvePaths();
+    const settings = existsSync(paths.submit) ? loadJsonFile(paths.submit, SubmitFileSchema) : null;
+    const now = () => new Date().toISOString();
+
+    // Ready to send, or stuck in Sending: the application is written. The link is where to apply.
+    if (['tailored', 'approved', 'needs_manual', 'failed'].includes(job.status)) {
+      const page = await checkApplyPage(url, job.title, settings?.browserPath);
+      if (!page.ok) {
+        if (page.closed) withStore((store) => store.markClosed(id, `no longer accepting applications (${url})`, now()));
+        return { ...page, cost: 0 };
+      }
+      withStore((store) => store.setApplyUrl(id, page.finalUrl, now()));
+      const sent = job.status === 'tailored' ? await actions.approve!({ ids: [id], force, mode }) : await actions.retry!({ ids: [id], mode });
+      return { ok: true, stage: 'send', applyUrl: page.finalUrl, mode, cost: 0, sent };
+    }
+
+    // Shortlist (or waiting to be tailored): read the full posting, score it, tailor from it.
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set in .env');
+    const result = await postingFromLink(url, job, { model: process.env.ENRICH_MODEL ?? process.env.TAILOR_MODEL, browserPath: settings?.browserPath });
+    if (!result.ok) {
+      if (result.closed) withStore((store) => store.markClosed(id, `no longer accepting applications (${url})`, now()));
+      return result;
+    }
+    const p = result.posting;
+    withStore((store) =>
+      store.saveEnrichment(id, { description: p.description, postingUrl: result.finalUrl, applyUrl: result.finalUrl, location: p.location, workplaceType: p.workplaceType, postedAt: p.postedAt }, now()),
+    );
+    // A fresh score on the full text, so the card shows how well it really fits.
+    let score: number | null = null;
+    try {
+      const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
+      const full = withStore((store) => store.get(id)!);
+      const scored = await new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL }).score(full);
+      score = scored.score;
+      withStore((store) => store.saveScore(id, scored, scored.score >= cutoff(full, prefs) ? 'shortlisted' : 'low_score', now()));
+    } catch {
+      // Scoring is a nicety here: the posting is saved and tailoring goes ahead regardless.
+    }
+    withStore((store) => store.setStatus(id, 'selected', `full posting from ${new URL(result.finalUrl).hostname}`, 'user', now()));
+    const { langgraph: up } = await connection();
+    await startTailor(up, [id], mode);
+    return { ok: true, stage: 'tailor', title: p.title, score, cost: result.cost, mode };
   },
 
   /** You applied yourself (on LinkedIn, say): record it so nothing applies again. */

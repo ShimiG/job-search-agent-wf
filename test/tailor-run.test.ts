@@ -124,6 +124,30 @@ describe('runTailor', () => {
     assert.match(letter, /בברכה,<br>/);
   });
 
+  it('trims a CV over its page target, weakest parts first, until it fits', async () => {
+    // A stand-in PDF engine: more than 3 bullets spill onto a second page.
+    const rendered: number[] = [];
+    const pdf = {
+      async render(html: string, out: string) {
+        writeFileSync(out, '%PDF-1.4');
+        const bullets = (html.match(/<li>/g) ?? []).length;
+        rendered.push(bullets);
+        return { pages: html.includes('Cover Letter') || bullets <= 3 ? 1 : 2 };
+      },
+      async close() {},
+    };
+    await runTailor(deps({ pdf }));
+    const app = store.latestApplication(jobId)!;
+    const report = app.verification as VerificationReport;
+    assert.equal(report.cvPages, 1);
+    assert.match(report.issues.find((i) => i.where === 'layout')!.message, /trimmed to fit 1 page\(s\): /);
+    const saved = JSON.parse(readFileSync(path.join(app.dir, 'content.json'), 'utf8'));
+    const count = saved.experience.reduce((n: number, x: { bullets: unknown[] }) => n + x.bullets.length, 0) + saved.projects.reduce((n: number, x: { bullets: unknown[] }) => n + x.bullets.length, 0);
+    assert.ok(count <= 3, `the saved content is the trimmed version (${count} bullets)`);
+    assert.ok(rendered[0]! > 3 && rendered.length > 2, 'it rendered, trimmed and rendered again');
+    assert.deepEqual((app.content as { experience: unknown[] }).experience, saved.experience, 'the database has the version in the PDF');
+  });
+
   it('re-renders hand edits with rule warnings and no reverts', async () => {
     await runTailor(deps());
     const app = store.latestApplication(jobId)!;
