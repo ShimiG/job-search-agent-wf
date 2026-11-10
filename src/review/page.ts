@@ -569,7 +569,10 @@ export const PAGE = String.raw`<!doctype html>
             }));
           }
           r.appendChild(btn('I applied myself', 'small', function () {
-            post('markApplied', { id: j.id }).then(function () { toast('Recorded #' + j.id + ' as applied.'); }, fail);
+            post('markApplied', { id: j.id }).then(function (res) {
+              var more = res && res.otherListings ? ' ' + res.otherListings + ' other listing' + (res.otherListings === 1 ? '' : 's') + ' of it removed.' : '';
+              toast('Recorded #' + j.id + ' as applied.' + more);
+            }, fail);
           }));
           extra.push(r);
           extra.push(linkBox(j, 'sending'));

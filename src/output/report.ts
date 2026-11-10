@@ -83,6 +83,7 @@ export function formatRunStats(stats: RunStats): string {
     `Sources: ${stats.sources.ok} ok, ${stats.sources.failed} failed`,
     `Postings: ${stats.fetched} fetched, ${stats.inserted} new, ${stats.changed} changed, ${stats.closed} closed`,
     ...(stats.alreadyApplied ? [`Applied: ${stats.alreadyApplied} job(s) marked from your confirmation emails`] : []),
+    ...(stats.appliedListings ? [`Skipped: ${stats.appliedListings} listing(s) of jobs you already applied to (or are applying to)`] : []),
     `Evaluated: ${stats.evaluated} → ${stats.filteredOut} filtered out${reasons ? ` (${reasons})` : ''}, ${stats.duplicates} duplicates, ${stats.queued} queued`,
     `Scored: ${stats.scored} → ${stats.shortlisted} shortlisted, ${stats.lowScore} below threshold, ${stats.scoreErrors} errors`,
   ];

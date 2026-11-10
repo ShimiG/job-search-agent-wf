@@ -15,6 +15,7 @@ import { scoutAgent, sendWithoutReview, submitAgent, tailorAgent } from '../grap
 import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
 import { checkApplyPage, postingFromLink } from '../llm/posting.ts';
 import { AnthropicScorer } from '../llm/scorer.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import { cutoff } from '../pipeline/run.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
@@ -521,8 +522,12 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
   /** You applied yourself (on LinkedIn, say): record it so nothing applies again. */
   async markApplied(body) {
     const { id } = z.object({ id: z.number().int().positive() }).parse(body);
-    withStore((store) => markSubmitted(store, id, 'you applied yourself (review page)'));
-    return { marked: id };
+    // Other listings of the same job (another board, an alert email) leave your shortlist with it.
+    const swept = withStore((store) => {
+      markSubmitted(store, id, 'you applied yourself (review page)');
+      return sweepAppliedListings(store, new Date().toISOString());
+    });
+    return { marked: id, otherListings: swept.applied };
   },
 
   /** Ends the current pipeline run where it's paused, e.g. an old one left waiting with another mode. */

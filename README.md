@@ -150,9 +150,18 @@ Alert emails only say the title, company and location, so these jobs are **parti
 
 Scout reads application confirmation emails (LinkedIn's "your application was sent to…", Indeed's
 "Indeed Application:", and the usual "Thank you for applying" emails from company sites and ATSs) and
-marks those jobs as applied. They never come back on your shortlist, a later posting of the same job is
-caught as a duplicate, and they count towards the Submitter's per-company limit. Turn it off with
+marks those jobs as applied. They count towards the Submitter's per-company limit. Turn it off with
 `"trackApplications": false` in `config/sources.json`.
+
+**Already applied, never shown again.** Every Scout run checks everything you've applied to (from those
+emails, from the Submitter, or **I applied myself**) before filtering or scoring anything, and removes
+every other listing of the same job: a re-post, the same job on another board, or the same job in another
+alert feed (LinkedIn vs. Drushim vs. AllJobs), including any already on your shortlist. It's the same job
+when it has the same job page address (tracking parameters ignored) or the same company and title (same
+level: "Senior" and "Junior" don't match). Two listings from one board in different cities count as
+separate openings. Jobs the Tailor or Submitter are already working on are protected the same way, so
+nothing is applied to twice. Removed listings are kept as duplicates of the applied job, with the reason,
+and cost nothing to score. The run summary shows how many were skipped.
 
 ## The review page
 

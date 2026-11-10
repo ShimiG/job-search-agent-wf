@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import type { JobStore } from '../db/store.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
 import { markSubmitted } from '../submit/run.ts';
-import type { JobRow } from '../types.ts';
-import { normalizeCompany, normalizeTitle } from '../util/text.ts';
-import { isSameJob } from './dedupe.ts';
+import type { JobRow, JobStatus } from '../types.ts';
+import { normalizeCompany, normalizeForMatch, normalizeTitle } from '../util/text.ts';
+import { isSameTitle } from './dedupe.ts';
 
 export interface AppliedStats {
   /** Jobs already in the database that you turned out to have applied to. */
@@ -13,8 +13,58 @@ export interface AppliedStats {
   added: number;
 }
 
-const sameTitle = (a: string, b: JobRow) =>
-  isSameJob({ id: -1, source: 'email', normTitle: a, location: '', descriptionIsPartial: true, firstSeenAt: '', status: 'submitted' }, b);
+/** You applied: Scout must never show you this job again, from any source. */
+export const APPLIED_STATUSES: readonly JobStatus[] = ['submitted'];
+/** On its way to being sent: another listing of it would mean applying twice. */
+export const IN_PROGRESS_STATUSES: readonly JobStatus[] = ['selected', 'tailored', 'tailor_error', 'approved', 'needs_manual'];
+/** Listings still in Scout's hands, which the sweep below may take off. */
+const SWEPT_STATUSES: readonly JobStatus[] = ['discovered', 'queued', 'score_error', 'low_score', 'shortlisted'];
+
+const UNKNOWN_COMPANY = normalizeCompany('Unknown company');
+
+type Listing = Pick<JobRow, 'source' | 'externalId' | 'normCompany' | 'normTitle' | 'location' | 'url' | 'postingUrl'>;
+
+/** Where a listing came from: the board, or for alert emails the feed ("linkedin", "drushim", "applied"...). */
+const origin = (job: Pick<Listing, 'source' | 'externalId'>) => (job.source === 'email' ? job.externalId.split(':')[0]! : job.source);
+
+/** A job page's address without tracking parameters, or null for a home page or anything unparseable. */
+export function normalizeJobUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, '');
+    if (!path) return null;
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_\w+|ref|refid|source|src|trackingid|from|gh_src|lever-source)$/i.test(key)) url.searchParams.delete(key);
+    }
+    url.searchParams.sort();
+    return `${url.hostname.replace(/^www\./i, '')}${path}${url.search}`.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+const listingUrls = (job: Pick<Listing, 'url' | 'postingUrl'>) =>
+  [job.url, job.postingUrl].map(normalizeJobUrl).filter((u): u is string => u !== null);
+
+/**
+ * Is `job` a listing of the job you applied to? Looser than dedupe on purpose: the same page address,
+ * or the same company and title, unless both come from one board (or one alert feed) with different
+ * locations, which is a separate opening. Confirmation emails carry no location, so that never blocks.
+ */
+export function isListingOfApplied(applied: Listing, job: Listing): boolean {
+  const urls = new Set(listingUrls(applied));
+  if (listingUrls(job).some((u) => urls.has(u))) return true;
+  if (!applied.normCompany || applied.normCompany === UNKNOWN_COMPANY || applied.normCompany !== job.normCompany) return false;
+  if (!isSameTitle(applied.normTitle, job.normTitle)) return false;
+  if (!applied.location.trim() || !job.location.trim() || origin(applied) !== origin(job)) return true;
+  return normalizeForMatch(applied.location) === normalizeForMatch(job.location);
+}
+
+const appliedRecord = (normCompany: string, normTitle: string): Listing => ({
+  source: 'email', externalId: 'applied:', normCompany, normTitle, location: '', url: '', postingUrl: null,
+});
+const sameTitle = (normTitle: string, job: JobRow) => isListingOfApplied(appliedRecord(job.normCompany, normTitle), job);
 
 /** A duplicate's canonical job is the one on your shortlist, so that's the one to mark. */
 function canonical(store: JobStore, job: JobRow): JobRow {
@@ -81,6 +131,59 @@ export function recordApplications(store: JobStore, apps: AppliedEmail[], now: s
     );
     markSubmitted(store, id, note(app), new Date(app.appliedAt));
     stats.added++;
+  }
+  return stats;
+}
+
+export interface SweepStats {
+  /** Listings of jobs you applied to. */
+  applied: number;
+  /** Listings of jobs the Tailor or Submitter are already working on. */
+  inProgress: number;
+}
+
+/**
+ * Takes every listing of a job you've applied to (or are applying to) out of Scout's hands, before it's
+ * filtered or scored: a re-post, the same job from another board or alert feed, or a row you had on your
+ * shortlist when you applied elsewhere. Each becomes a duplicate of the applied job, so it stays out of
+ * every list and is never scored or picked again. Safe to run any number of times.
+ */
+export function sweepAppliedListings(store: JobStore, now: string): SweepStats {
+  const stats: SweepStats = { applied: 0, inProgress: 0 };
+  // Applied first, so a listing matching both is filed under the job you actually sent.
+  const taken = [...store.listByStatus(APPLIED_STATUSES, { includeClosed: true }), ...store.listByStatus(IN_PROGRESS_STATUSES, { includeClosed: true })];
+  if (taken.length === 0) return stats;
+
+  const byCompany = new Map<string, JobRow[]>();
+  const byUrl = new Map<string, JobRow>();
+  const titleOnly: JobRow[] = [];
+  for (const job of taken) {
+    if (job.normCompany === UNKNOWN_COMPANY) titleOnly.push(job);
+    else byCompany.set(job.normCompany, [...(byCompany.get(job.normCompany) ?? []), job]);
+    for (const url of listingUrls(job)) if (!byUrl.has(url)) byUrl.set(url, job);
+  }
+
+  const listings = store.listByStatus(SWEPT_STATUSES);
+  for (const job of listings) {
+    let match = listingUrls(job)
+      .map((u) => byUrl.get(u))
+      .find(Boolean);
+    match ??= byCompany.get(job.normCompany)?.find((a) => isListingOfApplied(a, job));
+    // Indeed's confirmations name the job but not the company: accept the one Indeed listing with that title.
+    if (!match && origin(job) === 'indeed') {
+      match = titleOnly.find(
+        (a) => isSameTitle(a.normTitle, job.normTitle) && listings.filter((l) => origin(l) === 'indeed' && isSameTitle(a.normTitle, l.normTitle)).length === 1,
+      );
+    }
+    if (!match) continue;
+
+    const applied = APPLIED_STATUSES.includes(match.status);
+    const reason = applied
+      ? `you already applied to this job (#${match.id}${match.statusReason ? `: ${match.statusReason}` : ''})`
+      : `already being applied to as #${match.id} (${match.status.replace('_', ' ')})`;
+    store.setStatus(job.id, 'duplicate', reason, 'scout', now, { duplicateOf: match.id });
+    if (applied) stats.applied++;
+    else stats.inProgress++;
   }
   return stats;
 }

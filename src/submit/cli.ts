@@ -7,6 +7,7 @@ import { TailorConfigSchema } from '../tailor/schema.ts';
 import { createLogger } from '../util/logger.ts';
 import { AnthropicFieldMapper } from './llm.ts';
 import { createImapCodeSource } from './otp.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import { markSubmitted, openBrowser, runSubmitter, type AssistInfo } from './run.ts';
 import { SubmitFileSchema, type PlannedAnswer, type SubmitMode } from './schema.ts';
 
@@ -172,7 +173,8 @@ async function main() {
       const store = new JobStore(paths.db);
       try {
         markSubmitted(store, id, values.note ?? null);
-        console.log(`#${id}: recorded as submitted.`);
+        const { applied } = sweepAppliedListings(store, new Date().toISOString());
+        console.log(`#${id}: recorded as submitted.${applied ? ` ${applied} other listing(s) of it removed from Scout.` : ''}`);
       } finally {
         store.close();
       }
