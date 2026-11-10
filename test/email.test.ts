@@ -7,6 +7,7 @@ import { fixture } from './helpers.ts';
 const linkedin = DEFAULT_FEEDS.find((f) => f.name === 'linkedin')!;
 const drushim = DEFAULT_FEEDS.find((f) => f.name === 'drushim')!;
 const indeed = DEFAULT_FEEDS.find((f) => f.name === 'indeed')!;
+const alljobs = DEFAULT_FEEDS.find((f) => f.name === 'alljobs')!;
 
 describe('alert email parser', () => {
   it('extracts one job per ID with title, company and location', () => {
@@ -66,6 +67,45 @@ describe('alert email parser', () => {
     assert.equal(jobs[0]!.location, 'תל אביב יפו');
     assert.equal(jobs[1]!.company, 'Omega');
     assert.equal(jobs[1]!.location, 'Holon');
+  });
+
+  it('reads Hebrew AllJobs cards: buttons, job type and posting age are skipped', () => {
+    const job = (id: string, rows: string[]) =>
+      `<table dir="rtl"><tr><td><a href="https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=${id}&utm_source=SmartAgent">\u202B${rows[0]}\u202C</a></td></tr>${rows
+        .slice(1)
+        .map((r) => `<tr><td>${r}</td></tr>`)
+        .join('')}<tr><td><a href="https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=${id}&send=1">שליחת קו"ח</a></td></tr></table>`;
+    const html = `<div>${job('8123456', ['מפתח/ת Full Stack', 'משרה חמה', 'אומגה מערכות', 'משרה מלאה', 'תל אביב יפו', 'פורסם לפני 2 ימים'])}${job('8123457', [
+      'Backend Developer',
+      'חדש',
+      'חברה: Zeta Health',
+      'מיקום המשרה: חיפה, היברידי',
+      'סוג משרה: משרה מלאה',
+      'לפרטים נוספים',
+    ])}</div>`;
+    const jobs = parseAlertEmail(html, alljobs);
+    assert.deepEqual(
+      jobs.map((j) => [j.id, j.title, j.company, j.location, j.url]),
+      [
+        ['8123456', 'מפתח/ת Full Stack', 'אומגה מערכות', 'תל אביב יפו', 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=8123456'],
+        ['8123457', 'Backend Developer', 'Zeta Health', 'חיפה, היברידי', 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=8123457'],
+      ],
+    );
+    const normalized = alertJobToNormalized(jobs[1]!, alljobs);
+    assert.equal(normalized.externalId, 'alljobs:8123457');
+    assert.equal(normalized.workplaceType, 'hybrid');
+  });
+
+  it('finds AllJobs job IDs inside redirect links and with the label on its own line', () => {
+    const target = encodeURIComponent('https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=7654321');
+    const html = `<table><tr><td><a href="https://mail.alljobs.co.il/track/click?url=${target}">מנהל/ת מוצר</a></td></tr>
+      <tr><td>חברה:</td><td>חברת דלתא</td></tr><tr><td>אזור:</td><td>מרכז</td></tr>
+      <tr><td><a href="https://www.alljobs.co.il/User/Unsubscribe.aspx">הסרה</a></td></tr></table>`;
+    const jobs = parseAlertEmail(html, alljobs);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0]!.id, '7654321');
+    assert.equal(jobs[0]!.company, 'חברת דלתא');
+    assert.equal(jobs[0]!.location, 'מרכז');
   });
 
   it('produces partial jobs with remote detection', () => {

@@ -18,15 +18,15 @@ import { detectWorkplaceType, type SourceAdapter } from './common.ts';
 
 export const DEFAULT_FEEDS: EmailFeed[] = [
   {
-    // Saved-search alerts (jobalerts-noreply@) and "X is hiring" mails (jobs-noreply@) both carry
-    // jobs. Gmail matches whole address parts, so "noreply@linkedin.com" would find neither.
+  // Saved-search alerts (jobalerts-noreply@) and "X is hiring" mails (jobs-noreply@) both carry
+  // jobs. Gmail matches whole address parts, so "noreply@linkedin.com" would find neither.
     name: 'linkedin',
     from: 'linkedin.com',
     linkPattern: 'linkedin\\.com/(?:comm/)?jobs/view/(\\d+)',
     urlTemplate: 'https://www.linkedin.com/jobs/view/{id}/',
   },
   {
-    // Links are cts.indeed.com tracking URLs; safeDecode unwraps them to …/rc/clk?jk=<job key>.
+  // Links are cts.indeed.com tracking URLs; safeDecode unwraps them to …/rc/clk?jk=<job key>.
     name: 'indeed',
     from: 'indeed.com',
     linkPattern: 'indeed\\.com/(?:rc/clk|viewjob|pagead/clk)\\?(?:[^#]*&)?jk=([a-f0-9]{16})',
@@ -38,10 +38,28 @@ export const DEFAULT_FEEDS: EmailFeed[] = [
     linkPattern: 'drushim\\.co\\.il/job/(\\d+)',
     urlTemplate: 'https://www.drushim.co.il/job/{id}/',
   },
+  {
+  // AllJobs "smart agent" (סוכן חכם) mails, in Hebrew. Job pages are …/Search/UploadSingle.aspx?JobID=<id>;
+  // safeDecode unwraps redirect links that carry that URL encoded in a parameter.
+    name: 'alljobs',
+    from: 'alljobs.co.il',
+    linkPattern: 'alljobs\\.co\\.il/[^\\s"\'<>]*?[?&]jobid=(\\d+)',
+    urlTemplate: 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID={id}',
+  },
 ];
 
-const NOISE_LINE =
-  /^(view job|apply|easy apply|see (all|more) jobs|new|promoted|actively recruiting|fast growing|be an early applicant|\d+ (applicants?|connections?|school alumn?i?)|[$€£₪][\d.,]+k?(\s*[-–]\s*[$€£₪]?[\d.,]+k?)?(\s*\/\s*\w+)?|לצפייה במשרה|הגש מועמדות|למשרה)$/i;
+const NOISE_ALTERNATIVES = [
+  String.raw`view job|apply|easy apply|see (all|more) jobs|new|promoted|actively recruiting|fast growing|be an early applicant`,
+  String.raw`\d+ (applicants?|connections?|school alumn?i?)`,
+  String.raw`[$€£₪][\d.,]+k?(\s*[-–]\s*[$€£₪]?[\d.,]+k?)?(\s*\/\s*\w+)?`,
+  String.raw`full[- ]time|part[- ]time`,
+  // Hebrew buttons and badges (Drushim, AllJobs): "view the job", "send CV", "details", "hot job", "new"...
+  String.raw`(ל)?צפי(י)?ה במשרה|צפה במשרה|הגש(\/י)? מועמדות|(ל)?הגשת מועמדות|למשרה( המלאה)?|לפרטים( נוספים)?( ושליחת קו["״]ח)?`,
+  String.raw`(שלח|שלחו|שליחת)(\/י)? (קו["״]ח|קורות חיים)|משרה חמה|משרה דחופה|דחוף|חדש(ה)?|הסר(\/י)? מרשימת התפוצה`,
+  // Job type and posting age, which aren't a location: "משרה מלאה", "סוג משרה: …", "פורסם לפני 3 ימים".
+  String.raw`משרה (מלאה|חלקית)(\s*[,/]\s*משרה (מלאה|חלקית))*|משמרות|(סוג|היקף) (ה)?משרה\s*:.*|פורסמה?( לפני| ב|:).*|לפני \d+ (ימים|שעות|דקות)|היום|אתמול`,
+];
+const NOISE_LINE = new RegExp(`^(?:${NOISE_ALTERNATIVES.map((alt) => `(?:${alt})`).join('|')})$`, 'i');
 const SEPARATOR = /\s+[·•|]\s+|\s+-\s+/;
 
 export interface ParsedAlertJob {
@@ -65,7 +83,7 @@ export function parseAlertEmail(html: string, feed: EmailFeed): ParsedAlertJob[]
     const existing = byId.get(id);
     if (existing && existing.title) return;
     const url = feed.urlTemplate.replace('{id}', id);
-    // LinkedIn makes the whole card one link: title, "Company · Location", then badges, on separate lines.
+  // LinkedIn makes the whole card one link: title, "Company · Location", then badges, on separate lines.
     const linkLines = blockLines($, $(el)).filter((l) => !NOISE_LINE.test(l));
     if (linkLines.length >= 2) {
       byId.set(id, { id, url, title: linkLines[0]!, ...companyAndLocation(linkLines.slice(1)) });
@@ -101,8 +119,26 @@ function extractCard($: cheerio.CheerioAPI, link: Parameters<cheerio.CheerioAPI>
   return companyAndLocation(blockLines($, container).filter((l) => l !== title && !NOISE_LINE.test(l)));
 }
 
-/** The first "Company · Location" line, or the first two plain lines. */
+const COMPANY_LABEL = /^(?:company|employer|חברה|החברה|שם החברה|מעסיק|שם המעסיק)\s*[:：]\s*(.*)$/i;
+const LOCATION_LABEL = /^(?:location|city|region|מיקום(?: המשרה)?|אזור(?: המשרה)?|עיר|מקום (?:ה)?עבודה)\s*[:：]\s*(.*)$/i;
+
+/** A labelled field ("חברה: Acme"), or a label on its own line with the value on the next one. */
+function labelled(lines: string[], label: RegExp): string {
+  for (let i = 0; i < lines.length; i++) {
+    const m = label.exec(lines[i]!);
+    if (m) return cleanLine(m[1]!) || lines[i + 1] || '';
+  }
+  return '';
+}
+
+/** Labelled fields, else the first "Company · Location" line, else the first two plain lines. */
 function companyAndLocation(lines: string[]): { company: string; location: string } {
+  const labelledCompany = labelled(lines, COMPANY_LABEL);
+  const labelledLocation = labelled(lines, LOCATION_LABEL);
+  if (labelledCompany || labelledLocation) {
+    const rest = lines.filter((l) => !COMPANY_LABEL.test(l) && !LOCATION_LABEL.test(l) && l !== labelledCompany && l !== labelledLocation);
+    return { company: labelledCompany || rest[0] || '', location: labelledLocation || (labelledCompany ? rest[0] : rest[1]) || '' };
+  }
   const dotted = lines.find((l) => l.includes(' · '));
   if (dotted) {
     const at = dotted.lastIndexOf(' · ');
@@ -111,7 +147,7 @@ function companyAndLocation(lines: string[]): { company: string; location: strin
   let company = '';
   let location = '';
   for (const line of lines) {
-    const parts = line.split(SEPARATOR).map(cleanLine).filter(Boolean);
+    const parts = line.split(SEPARATOR).map(cleanLine).filter((p) => p && !NOISE_LINE.test(p));
     if (!company && parts.length >= 2) {
       company = parts[0]!;
       location = parts.slice(1).join(', ');
@@ -141,7 +177,8 @@ function blockLines($: cheerio.CheerioAPI, el: ReturnType<cheerio.CheerioAPI>): 
 }
 
 function cleanLine(text: string): string {
-  return text.replace(/[\s\u00a0\u200b-\u200f]+/g, ' ').trim();
+  // Hebrew mails are full of direction marks and embeddings (U+200E/F, U+202A–E, U+2066–9).
+  return text.replace(/[\s\u00a0\u200b-\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ').trim();
 }
 
 function safeDecode(href: string): string {
@@ -149,7 +186,7 @@ function safeDecode(href: string): string {
   try {
     url = decodeURIComponent(href);
   } catch {
-    // keep it as it is
+  // keep it as it is
   }
   return unwrapTracking(url);
 }
@@ -196,7 +233,7 @@ export function createEmailAlertAdapter(opts: EmailAlertOptions): SourceAdapter 
   return {
     key: 'email:alerts',
     kind: 'email',
-    // No snapshotPrefix: alert emails are a feed, not a full listing, so absence means nothing.
+  // No snapshotPrefix: alert emails are a feed, not a full listing, so absence means nothing.
     async fetchJobs() {
       const { ImapFlow } = await import('imapflow');
       const { simpleParser } = await import('mailparser');
