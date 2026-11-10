@@ -47,7 +47,7 @@ Requires Node.js 22+, Google Chrome (for PDFs and filling forms), and an
    ```bash
    npm run scout -- add-source https://job-boards.greenhouse.io/somecompany
    ```
-   and, optionally, alert emails from LinkedIn and Indeed (see [Alert emails](#linkedin-and-indeed-alert-emails)).
+   and, optionally, alert emails from LinkedIn, Indeed, Drushim or AllJobs (see [Alert emails](#linkedin-indeed-and-israeli-job-board-alert-emails)).
 6. **Try a free run first.** On the review page, or with
    `npm run scout -- run --no-score`, which fetches and filters without calling Claude. Check what
    gets through, adjust your preferences, then click **Run Scout** for a scored run.
@@ -110,7 +110,7 @@ page source and search for `token`. A board that returns 404 almost always has t
 
 Board jobs have full descriptions, and a job that disappears from its board is closed automatically.
 
-### LinkedIn and Indeed alert emails
+### LinkedIn, Indeed and Israeli job board alert emails
 
 LinkedIn and Indeed forbid automated access, but they email you alerts, and Scout reads those:
 
@@ -120,7 +120,9 @@ LinkedIn and Indeed forbid automated access, but they email you alerts, and Scou
 3. Set `IMAP_USER` and `IMAP_PASSWORD` in `.env`, and `"emailAlerts": { "enabled": true }` in
    `config/sources.json`.
 
-LinkedIn (saved-search alerts and "X is hiring" emails), Indeed and Drushim are built in. Add others
+LinkedIn (saved-search alerts and "X is hiring" emails), Indeed, Drushim and AllJobs (its Hebrew "סוכן חכם"
+alerts) are built in. Hebrew cards are read too: buttons such as "שליחת קו״ח", job-type lines such as "משרה מלאה"
+and labelled fields such as "חברה:" / "מיקום:" are recognised. Add others
 under `emailAlerts.feeds` (capture group 1 of `linkPattern` must be the job ID):
 
 ```json
