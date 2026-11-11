@@ -333,6 +333,7 @@ terminal, not a server.
 
 ```bash
 npm run schedule -- on 08:00 --days sun,tue,thu   # or --days sun-thu; every day if left out
+npm run schedule -- on 08:00 --batch               # score at half price (see Batch scoring below)
 npm run schedule -- status                         # when it runs, and the end of its log
 npm run schedule -- off
 ```
@@ -426,6 +427,20 @@ either cutoff re-sorts scored jobs on the next run without scoring them again. `
 caps scoring per run; the rest wait for the next run. Postings are untrusted input: the prompt tells the
 model to ignore instructions inside them. After changing preferences or your CV,
 `npm run scout -- reevaluate` sends Scout's jobs back through filters and scoring.
+
+**Batch scoring** (`npm run scout -- run --batch`, or `--batch` on the schedule) sends the run's
+postings to Claude as one batch: every token costs half as much, and the scores come back later,
+usually within the hour and 24 hours at most. It suits runs nobody is waiting on.
+
+- The run waits for the scores for `scoring.batchWaitMinutes` (60 by default; 0 doesn't wait), then
+  carries on as usual: shortlist, web lookups, the review page.
+- If they haven't arrived by then, the run ends and the next Scout run of any kind collects them first.
+  The review page says how many postings are out being scored.
+- A posting in a batch is never scored a second time, and a score that arrives for a job you've since
+  applied to, removed or dismissed is ignored.
+- Anything a batch couldn't score (a request that failed or expired, or a batch that couldn't be sent)
+  is scored right away at the normal price.
+- The advisor is asked the same way inside a batch. A local model ignores `--batch`: it's free already.
 
 ### Archiver
 
@@ -538,7 +553,7 @@ Measured or estimated with the default models:
 
 | Step | Cost |
 |---|---|
-| Scoring | about 0.1¢ per job with Haiku 5.5, more with Sonnet |
+| Scoring | about 0.1¢ per job with Haiku 5.5, more with Sonnet; half that with `--batch` |
 | Scoring advisor (borderline jobs only) | about 3–7¢ per consultation with Opus 5.5 (the first in a run writes its cache) |
 | Web lookup for a shortlisted alert job | about 10¢ each (capped by `enrich.maxPerRun`) |
 | Tailoring | about 10–30¢ per application |
@@ -575,7 +590,7 @@ npm run submit -- list | show <id> | retry <id> | mark-submitted <id> [--note ".
 
 # Everything else
 npm run review                          # the review page
-npm run schedule -- on [HH:MM] [--days sun-thu] | status | off
+npm run schedule -- on [HH:MM] [--days sun-thu] [--batch] | status | off
 npm run schedule -- archiver on | status | off
 npm run graph                           # LangGraph dev server (graph:tunnel for Safari)
 ```

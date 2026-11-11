@@ -285,6 +285,12 @@ export const PAGE = String.raw`<!doctype html>
       if (total) { var bar = el('span', 'progress'); var fill = el('span'); fill.style.width = Math.round(100 * d.scouting.scored / total) + '%'; bar.appendChild(fill); line.appendChild(bar); }
       s.appendChild(line);
     }
+    if (d.inBatch) {
+      var bl = el('span');
+      bl.appendChild(el('strong', null, 'Batch scoring: '));
+      bl.appendChild(document.createTextNode(d.inBatch + (d.inBatch === 1 ? ' posting is' : ' postings are') + ' being scored at half price. Scores usually arrive within the hour' + (d.scouting ? '.' : '; the next Scout run collects them.')));
+      s.appendChild(bl);
+    }
     if (d.pipeline && d.pipeline.stage !== 'done') {
       var p = el('span');
       p.appendChild(el('strong', null, 'Pipeline run: '));

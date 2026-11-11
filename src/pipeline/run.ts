@@ -1,12 +1,13 @@
 import type { Preferences } from '../config.ts';
-import type { JobRow } from '../types.ts';
+import type { JobRow, ScoreResult } from '../types.ts';
 import type { JobStore } from '../db/store.ts';
 import type { Scorer } from '../llm/scorer.ts';
+import { collectBatches, jobsInBatches, pendingBatches, pollCount, POLL_SECONDS, rememberBatch, type BatchStats, type Collected } from './batch.ts';
 import type { CostMeter, UsagePurpose } from '../llm/cost.ts';
 import type { SourceAdapter } from '../sources/common.ts';
 import type { Http } from '../sources/http.ts';
 import type { Logger } from '../util/logger.ts';
-import { mapWithConcurrency } from '../util/limiter.ts';
+import { mapWithConcurrency, sleep } from '../util/limiter.ts';
 import { enrichCost, type Enricher } from '../llm/enrich.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
 import { linkedinIdClock, linkedinJobId } from './age.ts';
@@ -34,6 +35,10 @@ export interface RunDeps {
   clock?: () => Date;
   /** The meter the scorer and enricher report to; stored with this run. */
   meter?: CostMeter;
+  /** Score through the Batch API: half the price, scores later. Ignored by a scorer that has no batches (a local model). */
+  batch?: boolean;
+  /** Waits between checks on a batch. Tests replace it. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 export interface RunStats {
@@ -60,6 +65,8 @@ export interface RunStats {
   closedPostings: number;
   /** Shortlisted alert jobs looked up on the web, how many full postings were found, and the cost in dollars. */
   enrich: { tried: number; found: number; cost: number };
+  /** Batch scoring: jobs sent this run, scores that arrived, and jobs still waiting in a batch. */
+  batch: BatchStats;
   /** Dollars spent on Claude this run, by what it was for (scoring, web lookups). */
   cost: { total: number; byPurpose: Partial<Record<UsagePurpose, number>> };
   /** Still waiting after this run hit maxJobsPerRun. */
@@ -75,6 +82,7 @@ function emptyStats(): RunStats {
     scored: 0, shortlisted: 0, lowScore: 0, scoreErrors: 0, scoringBacklog: 0,
     enrich: { tried: 0, found: 0, cost: 0 },
     cost: { total: 0, byPurpose: {} },
+    batch: { submitted: 0, collected: 0, pending: 0 },
     oldAlerts: 0,
     closedPostings: 0,
     filterReasons: {},
@@ -95,7 +103,7 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
   evaluate(deps, stats, clock);
   dropOldAlertJobs(deps, stats, clock);
   if (deps.scorer) {
-    await score(deps, deps.scorer, stats, iso);
+    await score(deps, deps.scorer, stats, iso, clock);
   } else {
     logger.info('Scoring skipped (--no-score). Filtered jobs are waiting in the "queued" state.');
   }
@@ -106,7 +114,8 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
     removeAppliedListings(deps, stats, iso);
   }
   await dropClosedPostings(deps, stats, iso);
-  stats.scoringBacklog = store.countScoringQueue(prefs.scoring.maxAttempts);
+  // Jobs in a batch are being scored already: they aren't backlog.
+  stats.scoringBacklog = Math.max(0, store.countScoringQueue(prefs.scoring.maxAttempts) - stats.batch.pending);
 
   if (deps.meter) stats.cost = deps.meter.totals();
   deps.meter?.detach();
@@ -372,26 +381,85 @@ async function enrichShortlist(deps: RunDeps, enricher: Enricher, scorer: Scorer
   }
 }
 
-async function score(deps: RunDeps, scorer: Scorer, stats: RunStats, iso: () => string) {
+async function score(deps: RunDeps, scorer: Scorer, stats: RunStats, iso: () => string, clock: () => Date) {
   const { store, prefs, logger } = deps;
   const { maxJobsPerRun, concurrency, maxAttempts } = prefs.scoring;
-  const queue = store.listScoringQueue(maxAttempts, maxJobsPerRun);
-  if (queue.length === 0) return;
-  logger.info(`Scoring ${queue.length} postings (concurrency ${concurrency})`);
+  const batcher = scorer.batch;
+  if (deps.batch && !batcher) logger.info('Batch scoring is for Claude only: this scorer scores now');
 
-  await mapWithConcurrency(queue, concurrency, async (job) => {
+  const save = (job: JobRow, result: ScoreResult, model: string | null) => {
+    const status = placeByScore(job, result.score, prefs);
+    store.saveScore(job.id, result, status, iso(), model);
+    stats.scored++;
+    if (status === 'shortlisted') stats.shortlisted++;
+    else stats.lowScore++;
+    logger.debug(`#${job.id} ${result.score} ${job.company} — ${job.title}`);
+  };
+  const fail = (job: JobRow, error: string) => {
+    store.recordScoreError(job.id, error, iso());
+    stats.scoreErrors++;
+    logger.warn(`Scoring #${job.id} failed: ${error}`);
+  };
+  const scoreNow = (jobs: JobRow[]) =>
+    mapWithConcurrency(jobs, concurrency, async (job) => {
+      try {
+        save(job, await scorer.score(job), scorer.model ?? null);
+      } catch (err) {
+        fail(job, (err as Error).message);
+      }
+    });
+  /** Saves what a batch returned; jobs whose request never ran are handed back to be scored now. */
+  const take = (got: Collected): JobRow[] => {
+    for (const s of got.scored) save(s.job, s.result, s.model);
+    for (const f of got.failed) fail(f.job, f.error);
+    stats.batch.collected += got.scored.length + got.failed.length;
+    if (got.retry.length) logger.warn(`${got.retry.length} job(s) came back from a scoring batch without a score: scoring them now`);
+    return got.retry;
+  };
+
+  // Scores from batches sent by earlier runs come first, whatever kind of run this is.
+  const again: JobRow[] = [];
+  if (batcher && pendingBatches(store).length) {
+    const got = await collectBatches(store, batcher, logger, clock());
+    if (got.scored.length) logger.info(`${got.scored.length} score(s) arrived from an earlier batch`);
+    again.push(...take(got));
+  }
+
+  // Jobs in a batch that's still being processed aren't scored twice.
+  const inBatch = jobsInBatches(store);
+  const queue = store
+    .listScoringQueue(maxAttempts, maxJobsPerRun + inBatch.size + again.length)
+    .filter((j) => !inBatch.has(j.id) && !again.some((a) => a.id === j.id))
+    .slice(0, maxJobsPerRun);
+
+  if (deps.batch && batcher && queue.length) {
+    let id: string | null = null;
     try {
-      const result = await scorer.score(job);
-      const status = placeByScore(job, result.score, prefs);
-      store.saveScore(job.id, result, status, iso(), scorer.model ?? null);
-      stats.scored++;
-      if (status === 'shortlisted') stats.shortlisted++;
-      else stats.lowScore++;
-      logger.debug(`#${job.id} ${result.score} ${job.company} — ${job.title}`);
+      id = await batcher.submit(queue);
     } catch (err) {
-      store.recordScoreError(job.id, (err as Error).message, iso());
-      stats.scoreErrors++;
-      logger.warn(`Scoring #${job.id} failed: ${(err as Error).message}`);
+      logger.warn(`Could not send the scoring batch (${(err as Error).message}): scoring now instead`);
     }
-  });
+    if (id === null) await scoreNow(queue);
+    else {
+      rememberBatch(store, { id, jobIds: queue.map((j) => j.id), submittedAt: iso(), model: scorer.model ?? null });
+      stats.batch.submitted = queue.length;
+      const polls = pollCount(prefs);
+      logger.info(`Sent ${queue.length} postings for batch scoring at half price${polls ? `; waiting up to ${prefs.scoring.batchWaitMinutes} minutes for the scores` : ''}`);
+      const wait = deps.wait ?? sleep;
+      for (let i = 0; i < polls; i++) {
+        await wait(POLL_SECONDS * 1000);
+        const got = await collectBatches(store, batcher, logger, clock(), id);
+        if (got.stillPending) continue;
+        again.push(...take(got));
+        break;
+      }
+    }
+  } else if (queue.length) {
+    logger.info(`Scoring ${queue.length} postings (concurrency ${concurrency})`);
+    await scoreNow(queue);
+  }
+
+  if (again.length) await scoreNow(again);
+  stats.batch.pending = jobsInBatches(store).size;
+  if (stats.batch.pending) logger.info(`${stats.batch.pending} posting(s) are still being scored in a batch: the next run collects their scores`);
 }

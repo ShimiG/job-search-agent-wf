@@ -93,6 +93,15 @@ export function formatRunStats(stats: RunStats): string {
   if (stats.enrich?.tried) {
     lines.push(`Looked up: ${stats.enrich.tried} shortlisted alert job(s) on the web, ${stats.enrich.found} full posting(s) found (about $${stats.enrich.cost.toFixed(2)})`);
   }
+  if (stats.batch?.submitted || stats.batch?.collected || stats.batch?.pending) {
+    const b = stats.batch;
+    const parts = [
+      b.submitted ? `${b.submitted} posting(s) sent for scoring at half price` : '',
+      b.collected ? `${b.collected} score(s) arrived` : '',
+      b.pending ? `${b.pending} still being scored (the next run collects them)` : '',
+    ].filter(Boolean);
+    lines.push(`Batch: ${parts.join(', ')}`);
+  }
   if (stats.cost?.total) {
     const parts = Object.entries(stats.cost.byPurpose).map(([purpose, d]) => `${PURPOSE_LABELS[purpose as UsagePurpose] ?? purpose} ${formatDollars(d)}`);
     lines.push(`Cost: about ${formatDollars(stats.cost.total)} this run${parts.length > 1 ? ` (${parts.join(', ')})` : ''}`);

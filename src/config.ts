@@ -58,8 +58,13 @@ export const PreferencesSchema = z.object({
       maxJobsPerRun: z.number().int().min(1).default(40),
       concurrency: z.number().int().min(1).max(10).default(3),
       maxAttempts: z.number().int().min(1).default(3),
+      /**
+       * Batch scoring (run --batch) costs half as much, and its scores arrive later, usually within
+       * the hour. A run waits this long for them; after that the next run collects them. 0 = don't wait.
+       */
+      batchWaitMinutes: z.number().int().min(0).max(1440).default(60),
     })
-    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3 }),
+    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3, batchWaitMinutes: 60 }),
   /**
    * For shortlisted alert-email jobs (title, company and location only): search the web for the full
    * posting on the company's own site, then score it again. About 6-8 cents per lookup.
