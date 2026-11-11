@@ -5,7 +5,7 @@ import path from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
 import { JobStore } from '../src/db/store.ts';
 import { launchPdfEngine } from '../src/tailor/render.ts';
-import { rerender, runTailor, type TailorDeps } from '../src/tailor/run.ts';
+import { rerender, runTailor, type TailorDeps, recentLetterLines } from '../src/tailor/run.ts';
 import type { TailoredContent, VerificationReport } from '../src/tailor/schema.ts';
 import { silentLogger } from '../src/util/logger.ts';
 import { makeJob } from './helpers.ts';
@@ -102,6 +102,51 @@ describe('runTailor', () => {
     const warnings = report.issues.filter((i) => i.where === 'letter-wording').map((i) => i.message);
     assert.match(warnings[0]!, /^\d+% of this letter's wording is the same as your letter to Acme \(#\d+, AI Automation Engineer\)$/);
     assert.match(readFileSync(path.join(app.dir, 'report.md'), 'utf8'), /\*\*letter-wording\*\*: \d+% of this letter's wording/);
+  });
+
+  it('shows the writer how your latest letters to other jobs opened and closed, so the next one differs', async () => {
+    const writer = new FakeWriter(sampleDraft, fixLetter);
+    await runTailor(deps({ writer }));
+    assert.equal(writer.drafts[0]!.recentLetters, undefined, 'no earlier letters yet');
+
+    // A new version of the same job isn't compared with itself.
+    store.setTailorFeedback(jobId, 'shorter');
+    store.setStatus(jobId, 'selected', null, 'user', '2026-10-15T08:30:00.000Z');
+    await runTailor(deps({ writer }));
+    assert.equal(writer.drafts[1]!.recentLetters, undefined);
+
+    const other = store.upsert(makeJob({ externalId: 'beta:1', company: 'Beta', title: 'Integration Engineer', description: 'LLM agents and REST integrations.' }), '2026-10-15T08:00:00.000Z').id;
+    store.setStatus(other, 'selected', null, 'user', '2026-10-15T08:00:00.000Z');
+    await runTailor(deps({ writer }));
+    assert.deepEqual(writer.drafts[2]!.recentLetters, [
+      { opening: 'Your posting describes LLM agents that resolve support conversations, which is the work I do every day.', closing: 'I would be glad to walk you through these flows.' },
+    ]);
+
+    // Turned off in config: the writer is told nothing.
+    const third = store.upsert(makeJob({ externalId: 'gamma:1', company: 'Gamma', title: 'Bot Developer', description: 'LLM agents.' }), '2026-10-15T08:00:00.000Z').id;
+    store.setStatus(third, 'selected', null, 'user', '2026-10-15T08:00:00.000Z');
+    const off = exampleTailorConfig();
+    off.coverLetter.varyFromRecent = 0;
+    await runTailor(deps({ writer, cfg: off }));
+    assert.equal(writer.drafts[3]!.recentLetters, undefined);
+  });
+
+  it('gives the writer only letters in the same language, each pair once', () => {
+    const save = (externalId: string, letterLanguage: 'en' | 'he', first: string, closing: string) => {
+      const id = store.upsert(makeJob({ externalId }), '2026-10-15T08:00:00.000Z').id;
+      store.saveApplication({
+        jobId: id, dir: outDir, cvLanguage: 'en', letterLanguage,
+        content: { company: 'X', jobTitle: 'Y', letterLanguage, coverLetter: { greeting: '', paragraphs: [first, 'More.'], closing, signOff: '' } },
+        verification: {}, feedback: null, model: null, createdAt: '2026-10-14T08:00:00.000Z',
+      });
+    };
+    save('a:1', 'en', 'I build bots. And more.', 'Talk soon.');
+    save('a:2', 'en', 'I build bots. Different second sentence.', 'Talk soon.');
+    save('a:3', 'he', 'אני בונה בוטים. ועוד.', 'נדבר.');
+    const now = new Date('2026-10-15T09:00:00Z');
+    assert.deepEqual(recentLetterLines(store, jobId, 'en', 5, now), [{ opening: 'I build bots.', closing: 'Talk soon.' }]);
+    assert.deepEqual(recentLetterLines(store, jobId, 'he', 5, now), [{ opening: 'אני בונה בוטים.', closing: 'נדבר.' }]);
+    assert.deepEqual(recentLetterLines(store, jobId, 'en', 0, now), []);
   });
 
   it('flags the package when a letter claim survives the revision', async () => {

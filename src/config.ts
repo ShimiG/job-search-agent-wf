@@ -4,6 +4,9 @@ import { z } from 'zod';
 
 const keywordList = z.array(z.string().min(1)).default([]);
 
+/** A range of scores, [from, to], both 0-100. */
+const scoreBand = z.tuple([z.number().min(0).max(100), z.number().min(0).max(100)]).refine(([from, to]) => from <= to, 'the range must be [from, to] with from no higher than to');
+
 export const PreferencesSchema = z.object({
   /** Free-form roles you're after. Only the LLM sees these. */
   targetRoles: z.array(z.string()).min(1),
@@ -63,8 +66,15 @@ export const PreferencesSchema = z.object({
        * the hour. A run waits this long for them; after that the next run collects them. 0 = don't wait.
        */
       batchWaitMinutes: z.number().int().min(0).max(1440).default(60),
+      /**
+       * The scorer asks the advisor (a stronger model) when its own score falls in this range, [from, to].
+       * Outside it the call is clear enough without a second opinion.
+       */
+      advisorBand: scoreBand.default([50, 80]),
+      /** The same for batch runs. A consultation costs half there, so the range can be wider for about the same spend. */
+      batchAdvisorBand: scoreBand.default([40, 90]),
     })
-    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3, batchWaitMinutes: 60 }),
+    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3, batchWaitMinutes: 60, advisorBand: [50, 80], batchAdvisorBand: [40, 90] }),
   /**
    * For shortlisted alert-email jobs (title, company and location only): search the web for the full
    * posting on the company's own site, then score it again. About 6-8 cents per lookup.

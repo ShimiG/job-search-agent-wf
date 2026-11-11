@@ -81,10 +81,11 @@ const ADVISOR_BETA = 'advisor-tool-2026-03-01';
 /** Caps the advisor's answer (thinking included), so one consultation stays a few cents. */
 const ADVISOR_MAX_TOKENS = 2048;
 
-const ADVISOR_INSTRUCTIONS = `You have an advisor tool: a stronger model that reads this conversation and advises you.
-First decide a provisional score. If it is between 50 and 80, or you are unsure whether a hard
+/** When to ask: scores in [from, to] are the close calls. A batch run's range is wider (see batchAdvisorBand). */
+const advisorInstructions = ([from, to]: readonly [number, number]) => `You have an advisor tool: a stronger model that reads this conversation and advises you.
+First decide a provisional score. If it is between ${from} and ${to}, or you are unsure whether a hard
 requirement or dealbreaker applies, you must call the advisor tool before answering, then give your
-final answer. Below 50 or above 80, answer without it. The final score is yours to give.`;
+final answer. Below ${from} or above ${to}, answer without it. The final score is yours to give.`;
 
 /**
  * The advisor model from SCOUT_ADVISOR_MODEL: unset means DEFAULT_ADVISOR_MODEL, "off" turns it off.
@@ -170,6 +171,7 @@ export class AnthropicScorer implements Scorer {
   private readonly advisor: string | null;
   private readonly profile: string;
   private readonly meter?: CostMeter;
+  private readonly bands: { live: readonly [number, number]; batch: readonly [number, number] };
 
   constructor(opts: AnthropicScorerOptions) {
     this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 4, timeout: 60_000 });
@@ -178,17 +180,18 @@ export class AnthropicScorer implements Scorer {
     this.model = this.advisor ? `${this.executor}+advisor:${this.advisor}` : this.executor;
     this.profile = buildCandidateProfile(opts.cv, opts.prefs);
     this.meter = opts.meter;
+    this.bands = { live: opts.prefs.scoring.advisorBand, batch: opts.prefs.scoring.batchAdvisorBand };
   }
 
-  /** The same request whether it's sent now or in a batch. */
-  private request(job: NormalizedJob) {
+  /** The same request whether it's sent now or in a batch, except for when the advisor is asked. */
+  private request(job: NormalizedJob, inBatch = false) {
     return {
       model: this.executor,
       max_tokens: 1024,
       // The instructions and the CV are identical for every job, so they're cached:
       // after the first call each job only pays full price for the posting itself.
       system: [
-        { type: 'text' as const, text: this.advisor ? `${INSTRUCTIONS}\n\n${ADVISOR_INSTRUCTIONS}` : INSTRUCTIONS },
+        { type: 'text' as const, text: this.advisor ? `${INSTRUCTIONS}\n\n${advisorInstructions(inBatch ? this.bands.batch : this.bands.live)}` : INSTRUCTIONS },
         { type: 'text' as const, text: this.profile, cache_control: { type: 'ephemeral' as const } },
       ],
       messages: [{ role: 'user' as const, content: buildJobPrompt(job) }],
@@ -237,7 +240,7 @@ export class AnthropicScorer implements Scorer {
   readonly batch: BatchScoring = {
     submit: async (jobs) => {
       const requests = jobs.map((job) => {
-        const { output_config, ...rest } = this.request(job);
+        const { output_config, ...rest } = this.request(job, true);
         // The format helper carries a parse function for the live call; a batch takes the schema alone.
         const params = { ...rest, output_config: { format: { type: output_config.format.type, schema: output_config.format.schema } } };
         return { custom_id: `job-${job.id}`, params: this.advisor ? { ...params, ...this.advisorParams(this.advisor) } : params };

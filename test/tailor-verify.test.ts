@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { applyVerdicts, claimsForReview, extractTerms, factCheck, normalizeDraft, unknownNumbers } from '../src/tailor/verify.ts';
+import { AnthropicTailor } from '../src/tailor/llm.ts';
+import { makeJob } from './helpers.ts';
 import { exampleCv, exampleTailorConfig, sampleDraft } from './tailor-helpers.ts';
 
 const cv = exampleCv();
@@ -119,5 +121,22 @@ describe('claims and verdicts', () => {
     assert.equal(body.experience[0]!.bullets[0]!.text, cv.experience[0]!.highlights.find((h) => h.id === 'acme-llm-agents')!.text);
     assert.equal(issues.length, 2);
     assert.deepEqual([...letterProblems], [[2, 'claims Kubernetes experience']]);
+  });
+});
+
+describe('the writer\'s brief', () => {
+  it('lists earlier openings and closings to differ from, in the request and outside the cached CV', async () => {
+    let request: { system: Array<{ text: string }>; messages: Array<{ content: string }> } | undefined;
+    const client = { messages: { parse: async (req: never) => ((request = req), { stop_reason: 'end_turn', parsed_output: sampleDraft(), usage: { input_tokens: 1, output_tokens: 1 } }) } };
+    const tailor = new AnthropicTailor({ client: client as never });
+    const input = { job: { ...makeJob(), id: 1 } as never, cv: exampleCv(), cfg: exampleTailorConfig(), cvLanguage: 'en' as const, letterLanguage: 'en' as const };
+    await tailor.draft({ ...input, recentLetters: [{ opening: 'I was excited to see "this" role.', closing: 'Talk soon.' }] });
+    const user = request!.messages[0]!.content;
+    assert.match(user, /<earlier_letters>\n1\. opened: "I was excited to see \\"this\\" role\." closed: "Talk soon\."\n<\/earlier_letters>/);
+    assert.match(user, /open this letter with a different move/);
+    assert.ok(request!.system.every((b) => !b.text.includes('earlier_letters')), 'the cached part is unchanged');
+
+    await tailor.draft(input);
+    assert.doesNotMatch(request!.messages[0]!.content, /earlier_letters/);
   });
 });
