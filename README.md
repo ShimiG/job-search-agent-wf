@@ -94,6 +94,21 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `REVIEW_AUTO_OPEN=false` | Stops Scout from opening the review page when it finishes. |
 | `REVIEW_PORT`, `LANGGRAPH_URL` | Defaults 4100 and `http://127.0.0.1:2024`. |
 
+### Projects in your CV
+
+The Tailor shows at most `cv.maxProjects` projects (2 by default) and picks the ones that fit each job,
+so your CV should list all of them, each with several highlights to choose from. To add or update them
+without uploading the whole CV again:
+
+```bash
+npm run scout -- cv-projects my-projects.json
+```
+
+The file is `{ "projects": [ { "id", "name", "stack": [], "highlights": [ { "id", "text" } ] } ] }`. A
+project with the same ID or the same name replaces the old entry, the rest are added, and projects the
+file doesn't list stay (`--replace-all` removes them). Highlight IDs must be unique across the CV. The
+old CV is kept next to it as a backup.
+
 ## Where jobs come from
 
 ### Job boards
@@ -579,6 +594,7 @@ npm run scout -- run [--no-score] [--batch] [--open-review]
 npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [--md]
 npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
+npm run scout -- cv-projects <file.json> [--replace-all]
 npm run scout -- watch [--cron "0 8 * * *"]
 npm run scout -- compare-scorers [--limit 40]
 
