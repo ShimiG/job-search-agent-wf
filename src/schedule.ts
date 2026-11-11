@@ -8,7 +8,8 @@ import path from 'node:path';
  * is asleep at that time, launchd runs it on wake. The run opens the review page when jobs reach
  * your shortlist.
  *
- *   npm run schedule -- on 08:00 [--days sun-thu]   install or change it (default: every day)
+ *   npm run schedule -- on 08:00 [--days sun-thu] [--batch]   install or change it (default: every day)
+ *                                    --batch: score with Claude at half price; scores usually arrive within the hour
  *   npm run schedule -- status       when it runs, and the end of its log
  *   npm run schedule -- off          remove it
  *
@@ -41,11 +42,11 @@ export function parseDays(spec: string): number[] {
 
 const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function plist(hour: number, minute: number, days: number[]): string {
+function plist(hour: number, minute: number, days: number[], batch = false): string {
   const at = (extra: string) => `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer>${extra}</dict>`;
   const when = days.length === 7 ? at('') : `<array>\n${days.map((d) => `    ${at(`<key>Weekday</key><integer>${d}</integer>`)}`).join('\n')}\n  </array>`;
   // The absolute node path: launchd doesn't load your shell, so nvm's node isn't on its PATH.
-  const args = [process.execPath, '--import', 'tsx', path.join(ROOT, 'src', 'cli.ts'), 'run', '--open-review'];
+  const args = [process.execPath, '--import', 'tsx', path.join(ROOT, 'src', 'cli.ts'), 'run', '--open-review', ...(batch ? ['--batch'] : [])];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -105,19 +106,20 @@ const unload = (label = LABEL) => {
 
 const describeDays = (days: number[]) => (days.length === 7 ? 'every day' : days.map((d) => DAY_NAMES[d]).join(', '));
 
-function on(time = '08:00', daySpec = 'sun-sat') {
+function on(time = '08:00', daySpec = 'sun-sat', batch = false) {
   const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(time);
   if (!m) throw new Error(`Use a 24-hour time like 08:00, not "${time}"`);
   const [hour, minute] = [Number(m[1]), Number(m[2])];
   const days = parseDays(daySpec);
   mkdirSync(path.dirname(PLIST), { recursive: true });
   mkdirSync(path.dirname(LOG), { recursive: true });
-  writeFileSync(PLIST, plist(hour, minute, days));
+  writeFileSync(PLIST, plist(hour, minute, days, batch));
   unload();
   launchctl('bootstrap', DOMAIN, PLIST);
   console.log(`Scout will run ${describeDays(days)} at ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}.`);
+  if (batch) console.log('Scoring goes through a batch at half price: the run waits for the scores (usually under an hour), then opens the review page.');
   console.log(`Log: ${LOG}`);
-  console.log(`Node: ${process.execPath} (run "npm run schedule -- on ${time} --days ${daySpec}" again if you switch Node versions)`);
+  console.log(`Node: ${process.execPath} (run "npm run schedule -- on ${time} --days ${daySpec}${batch ? ' --batch' : ''}" again if you switch Node versions)`);
 }
 
 function off() {
@@ -170,14 +172,16 @@ function archiver(command: string | undefined) {
 const argv = process.argv.slice(2);
 const daysAt = argv.indexOf('--days');
 const daySpec = daysAt >= 0 ? argv.splice(daysAt, 2)[1] : undefined;
+const batchAt = argv.indexOf('--batch');
+const batch = batchAt >= 0 && argv.splice(batchAt, 1).length > 0;
 const [command, arg] = argv;
 try {
   if (process.platform !== 'darwin') throw new Error('Scheduling uses launchd, which is macOS only. Elsewhere use "npm run scout -- watch".');
   if (command === 'archiver') archiver(arg);
-  else if (command === 'on') on(arg, daySpec);
+  else if (command === 'on') on(arg, daySpec, batch);
   else if (command === 'off') off();
   else if (command === 'status') status();
-  else console.log('Usage: npm run schedule -- on [HH:MM] [--days sun-thu] | off | status');
+  else console.log('Usage: npm run schedule -- on [HH:MM] [--days sun-thu] [--batch] | off | status');
 } catch (err) {
   console.error((err as Error).message);
   process.exitCode = 1;

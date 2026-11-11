@@ -46,8 +46,9 @@ Usage: npm run scout -- <command> [options]
 
 Commands:
   init                         Create config/ and data/ files from the examples
-  run [--no-score] [--open-review]
-                               Fetch all sources, filter, dedupe, and score (--no-score skips the LLM);
+  run [--no-score] [--batch] [--open-review]
+                               Fetch all sources, filter, dedupe, and score (--no-score skips the LLM;
+                               --batch scores with Claude at half price, with scores usually within the hour);
                                --open-review opens the review page when jobs reach your shortlist
   list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [--md]
                                Ranked shortlist (default status: shortlisted). --md writes a Markdown file
@@ -131,7 +132,7 @@ async function commandCompareScorers(paths: Paths, logger: Logger, size: number)
   console.log(`Full report: ${file}`);
 }
 
-async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
+async function commandRun(paths: Paths, logger: Logger, noScore: boolean, batch = false) {
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   const model = process.env.SCOUT_MODEL;
   const meter = new CostMeter('scout');
@@ -149,7 +150,7 @@ async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
     const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
     // The web lookup is Claude's, so it needs the API key even when scoring is local.
     const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
-    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
+    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, batch, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
     console.log('\n' + formatRunStats(stats));
     const shortlist = store.listByStatus(['shortlisted']);
     if (shortlist.length) console.log(`\n${shortlist.length} jobs on your shortlist. See them with: npm run scout -- list`);
@@ -283,7 +284,7 @@ function commandInit(root: string, paths: Paths) {
   console.log('then add boards with "npm run scout -- add-source <careers-url>".');
 }
 
-async function commandWatch(paths: Paths, logger: Logger, cronExpr: string, noScore: boolean) {
+async function commandWatch(paths: Paths, logger: Logger, cronExpr: string, noScore: boolean, batch = false) {
   const cron = await import('node-cron');
   if (!cron.validate(cronExpr)) throw new ConfigError(`Invalid cron expression: ${cronExpr}`);
   let running = false;
@@ -291,7 +292,7 @@ async function commandWatch(paths: Paths, logger: Logger, cronExpr: string, noSc
     if (running) return logger.warn('Previous run still in progress; skipping this tick');
     running = true;
     try {
-      await commandRun(paths, logger, noScore);
+      await commandRun(paths, logger, noScore, batch);
     } catch (err) {
       logger.error(`Run failed: ${(err as Error).message}`);
     } finally {
@@ -311,6 +312,7 @@ async function main() {
     allowPositionals: true,
     options: {
       'no-score': { type: 'boolean' },
+      batch: { type: 'boolean' },
       'open-review': { type: 'boolean' },
       status: { type: 'string' },
       all: { type: 'boolean' },
@@ -326,6 +328,7 @@ async function main() {
   });
   const [command, ...args] = positionals;
   const noScore = Boolean(values['no-score']);
+  const batch = Boolean(values.batch);
 
   switch (command) {
     case 'init':
@@ -342,7 +345,7 @@ async function main() {
         logger.warn(`${cvStatus(paths.masterCv).reason}. ${UPLOAD_CV_FIRST} Skipping this run.`);
         return;
       }
-      await commandRun(paths, logger, noScore);
+      await commandRun(paths, logger, noScore, batch);
       if (values['open-review'] && withStore(paths, (store) => store.listByStatus(['shortlisted']).length)) await openReviewPage(logger);
       return;
     }
@@ -415,7 +418,7 @@ async function main() {
     case 'compare-scorers':
       return commandCompareScorers(paths, logger, Number(values.limit ?? 40));
     case 'watch':
-      return commandWatch(paths, logger, String(values.cron ?? '0 8 * * *'), noScore);
+      return commandWatch(paths, logger, String(values.cron ?? '0 8 * * *'), noScore, batch);
     default:
       console.log(HELP);
       if (command && command !== 'help' && !values.help) process.exitCode = 1;

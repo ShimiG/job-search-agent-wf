@@ -31,6 +31,9 @@ const HAIKU_LONG: Rates = { input: 0.5, output: 2.5, cacheWrite: 0.625, cacheRea
 /** Web search is billed per search on top of tokens; web fetch only costs its tokens. */
 export const WEB_SEARCH_DOLLARS = 0.01;
 
+/** The Message Batches API bills every token, cached or not, at half the list price. */
+export const BATCH_DISCOUNT = 0.5;
+
 /** Models not in the table are priced as Sonnet 5.5 (the default model everywhere in this app). */
 export const FALLBACK_MODEL = 'claude-sonnet-5-5';
 
@@ -126,9 +129,10 @@ export class CostMeter {
     private readonly clock: () => Date = () => new Date(),
   ) {}
 
-  record(purpose: UsagePurpose, model: string, usage: ApiUsage, jobId?: number | null): number {
+  /** `discount`: the share of list price paid, e.g. BATCH_DISCOUNT for a Message Batches request. */
+  record(purpose: UsagePurpose, model: string, usage: ApiUsage, jobId?: number | null, discount = 1): number {
     const counts = tokenCounts(usage);
-    const cost = tokenCost(model, counts);
+    const cost = tokenCost(model, counts) * discount;
     const entry: UsageEntry = {
       ...counts,
       at: this.clock().toISOString(),

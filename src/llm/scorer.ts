@@ -1,4 +1,4 @@
-import type { ApiUsage, CostMeter } from './cost.ts';
+import { BATCH_DISCOUNT, type ApiUsage, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -26,6 +26,17 @@ export interface Scorer {
   /** Saved with each score, so Claude's scores can be told apart from a local model's. */
   readonly model?: string;
   score(job: NormalizedJob): Promise<ScoreResult>;
+  /** Scoring through the Message Batches API: half the price, results later. Only Claude has it. */
+  readonly batch?: BatchScoring;
+}
+
+export type BatchScore = { ok: true; result: ScoreResult } | { ok: false; error: string; /** The request never ran (errored, expired, cancelled): worth scoring again. */ retry: boolean };
+
+export interface BatchScoring {
+  /** Sends these jobs to be scored and returns the batch's ID. */
+  submit(jobs: Array<NormalizedJob & { id: number }>): Promise<string>;
+  /** Each job's score once the batch has ended; null while it's still being processed. */
+  collect(batchId: string): Promise<Map<number, BatchScore> | null>;
 }
 
 const SENIORITY_VALUES: readonly ScoreResult['seniorityFit'][] = ['under', 'fit', 'over', 'unclear'];
@@ -169,8 +180,9 @@ export class AnthropicScorer implements Scorer {
     this.meter = opts.meter;
   }
 
-  async score(job: NormalizedJob): Promise<ScoreResult> {
-    const request = {
+  /** The same request whether it's sent now or in a batch. */
+  private request(job: NormalizedJob) {
+    return {
       model: this.executor,
       max_tokens: 1024,
       // The instructions and the CV are identical for every job, so they're cached:
@@ -182,30 +194,90 @@ export class AnthropicScorer implements Scorer {
       messages: [{ role: 'user' as const, content: buildJobPrompt(job) }],
       output_config: { format: zodOutputFormat(ScoreSchema) },
     };
+  }
+
+  /** What the advisor adds to a request: room for its call, and the tool itself. */
+  private advisorParams(advisor: string) {
+    return {
+      // Room for the call to the advisor as well as the score.
+      max_tokens: 2048,
+      // The tool list never changes, so the cached prefix (tools, then system) stays valid.
+      tools: [{ type: 'advisor_20260301' as const, name: 'advisor' as const, model: advisor, max_uses: 1, max_tokens: ADVISOR_MAX_TOKENS, caching: { type: 'ephemeral' as const } }],
+    };
+  }
+
+  private recordCost(usage: ApiUsage, jobId: number | null, discount = 1): void {
+    if (!this.meter) return;
+    this.meter.record('score', this.executor, usage, jobId, discount);
+    // What the advisor read and wrote is billed at its own rates, reported per iteration.
+    for (const step of (usage as { iterations?: Array<ApiUsage & { type?: string; model?: string }> | null }).iterations ?? []) {
+      if (step.type === 'advisor_message') this.meter.record('score', step.model ?? this.advisor ?? this.executor, step, jobId, discount);
+    }
+  }
+
+  async score(job: NormalizedJob): Promise<ScoreResult> {
+    const request = this.request(job);
     const message = this.advisor
-      ? await this.client.beta.messages.parse({
-          ...request,
-          // Room for the call to the advisor as well as the score.
-          max_tokens: 2048,
-          betas: [ADVISOR_BETA],
-          // The tool list never changes, so the cached prefix (tools, then system) stays valid.
-          tools: [{ type: 'advisor_20260301', name: 'advisor', model: this.advisor, max_uses: 1, max_tokens: ADVISOR_MAX_TOKENS, caching: { type: 'ephemeral' } }],
-        })
+      ? await this.client.beta.messages.parse({ ...request, ...this.advisorParams(this.advisor), betas: [ADVISOR_BETA] })
       : await this.client.messages.parse(request);
     if (this.meter) {
       const jobId = (job as { id?: unknown }).id;
-      const forJob = typeof jobId === 'number' ? jobId : null;
-      this.meter.record('score', this.executor, message.usage, forJob);
-      // What the advisor read and wrote is billed at its own rates, reported per iteration.
-      for (const step of (message.usage as { iterations?: Array<ApiUsage & { type?: string; model?: string }> | null }).iterations ?? []) {
-        if (step.type === 'advisor_message') this.meter.record('score', step.model ?? this.advisor ?? this.executor, step, forJob);
-      }
+      this.recordCost(message.usage, typeof jobId === 'number' ? jobId : null);
     }
     if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
     if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');
     if (!message.parsed_output) throw new Error('Model returned no structured output');
     return postProcess(message.parsed_output);
   }
+
+  /**
+   * The same requests through the Message Batches API: every token at half price, results usually
+   * within the hour (24 hours at most). Each job is one request, found again by its custom_id.
+   */
+  readonly batch: BatchScoring = {
+    submit: async (jobs) => {
+      const requests = jobs.map((job) => {
+        const { output_config, ...rest } = this.request(job);
+        // The format helper carries a parse function for the live call; a batch takes the schema alone.
+        const params = { ...rest, output_config: { format: { type: output_config.format.type, schema: output_config.format.schema } } };
+        return { custom_id: `job-${job.id}`, params: this.advisor ? { ...params, ...this.advisorParams(this.advisor) } : params };
+      });
+      const created = this.advisor
+        ? await this.client.beta.messages.batches.create({ betas: [ADVISOR_BETA], requests })
+        : await this.client.messages.batches.create({ requests });
+      return created.id;
+    },
+
+    collect: async (batchId) => {
+      const batches = this.advisor ? this.client.beta.messages.batches : this.client.messages.batches;
+      const status = await batches.retrieve(batchId);
+      if (status.processing_status !== 'ended') return null;
+      const scores = new Map<number, BatchScore>();
+      for await (const entry of await batches.results(batchId)) {
+        const jobId = Number(/^job-(\d+)$/.exec(entry.custom_id)?.[1]);
+        if (!Number.isInteger(jobId)) continue;
+        const r = entry.result;
+        if (r.type !== 'succeeded') {
+          const why = r.type === 'errored' ? `the request failed (${(r.error as { error?: { message?: string } }).error?.message ?? 'no reason given'})` : `the request ${r.type}`;
+          scores.set(jobId, { ok: false, error: `batch scoring: ${why}`, retry: true });
+          continue;
+        }
+        const message = r.message;
+        this.recordCost(message.usage, jobId, BATCH_DISCOUNT);
+        try {
+          if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
+          if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');
+          // The score is the last text block: with an advisor, earlier blocks are its call and reply.
+          const text = [...message.content].reverse().find((b): b is typeof b & { type: 'text'; text: string } => b.type === 'text')?.text;
+          if (!text) throw new Error('Model returned no structured output');
+          scores.set(jobId, { ok: true, result: postProcess(ScoreSchema.parse(JSON.parse(text))) });
+        } catch (err) {
+          scores.set(jobId, { ok: false, error: (err as Error).message, retry: false });
+        }
+      }
+      return scores;
+    },
+  };
 }
 
 /** A posting Claude scored, shown to a local model as a worked example. */

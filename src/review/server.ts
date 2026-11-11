@@ -18,6 +18,7 @@ import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
 import { checkApplyPage, pastedPosting, postingFromLink } from '../llm/posting.ts';
 import { createScorer } from '../llm/scorer.ts';
 import { sweepAppliedListings } from '../pipeline/applied.ts';
+import { jobsInBatches } from '../pipeline/batch.ts';
 import { addManualJob } from '../pipeline/manual.ts';
 import { outcomeReport, WAITING_DAYS } from '../pipeline/outcomes.ts';
 import { placeByScore, resortByCutoff } from '../pipeline/run.ts';
@@ -285,7 +286,8 @@ function scouting(store: JobStore) {
   if (!run || run.finishedAt || Date.now() - Date.parse(run.startedAt) > 3 * 3_600_000) return null;
   const prefs = loadJsonFile(resolvePaths().preferences, PreferencesSchema);
   const scored = store.countScoredSince(run.startedAt);
-  const waiting = store.countScoringQueue(prefs.scoring.maxAttempts);
+  // Jobs in a batch aren't "to go": their scores arrive together, later.
+  const waiting = Math.max(0, store.countScoringQueue(prefs.scoring.maxAttempts) - jobsInBatches(store).size);
   return { startedAt: run.startedAt, scored, remaining: Math.max(0, Math.min(waiting, prefs.scoring.maxJobsPerRun - scored)) };
 }
 
@@ -311,6 +313,8 @@ async function state() {
     tasks: tasks.filter((t) => !t.done || (t.error && Date.now() - Date.parse(t.startedAt) < 3_600_000)),
     ...withStore((store) => ({
       scouting: scouting(store),
+      // Postings sent for batch scoring whose scores haven't arrived yet.
+      inBatch: jobsInBatches(store).size,
       shortlist: store.listByStatus(['shortlisted']).map(view),
       tailoring: store.listByStatus(['selected', 'tailor_error']).map(view),
       ready: store.listByStatus(['tailored']).map((j) => ({ ...view(j), docs: documents(store, j), spent: spentOn(store, j.id) })),
