@@ -7,7 +7,7 @@ import { detectLanguage } from '../pipeline/language.ts';
 import type { JobRow } from '../types.ts';
 import { TAILOR_INPUT_STATUSES } from '../types.ts';
 import type { Logger } from '../util/logger.ts';
-import type { ClaimVerifier, DraftInput, TailorWriter } from './llm.ts';
+import type { ClaimVerifier, DraftInput, RecentLetter, TailorWriter } from './llm.ts';
 import { documentNames, renderCvHtml, renderLetterHtml, writeText, type PdfEngine } from './render.ts';
 import { SUPPORTED_LANGUAGES, type Issue, type OutputLanguage, type TailorConfig, type TailoredContent, type VerificationReport } from './schema.ts';
 import { formatCoverage, keywordCoverage } from './keywords.ts';
@@ -53,7 +53,8 @@ export async function produceContent(job: JobRow, deps: TailorDeps): Promise<{ c
   const { cv, cfg, writer, verifier } = deps;
   const now = (deps.clock ?? (() => new Date()))();
   const langs = decideLanguages(job, cfg);
-  const input: DraftInput = { job, cv, cfg, ...langs, feedback: job.tailorFeedback };
+  const recentLetters = recentLetterLines(deps.store, job.id, langs.letterLanguage, cfg.coverLetter.varyFromRecent, now);
+  const input: DraftInput = { job, cv, cfg, ...langs, feedback: job.tailorFeedback, ...(recentLetters.length ? { recentLetters } : {}) };
   const postText = postingText(job);
 
   const draft = await writer.draft(input);
@@ -111,6 +112,32 @@ export async function produceContent(job: JobRow, deps: TailorDeps): Promise<{ c
 
 /** Letters written in the last 90 days are the ones a pattern could show up across. */
 const EARLIER_LETTERS_DAYS = 90;
+
+const firstSentence = (text: string) => (/^.*?[.!?](?=\s|$)/s.exec(text.trim())?.[0] ?? text.trim()).slice(0, 240);
+
+/**
+ * How your latest `count` cover letters to other jobs, in this language, opened and closed. The writer
+ * is shown them so a new letter starts and ends differently; the reuse check afterwards catches what
+ * still slips through.
+ */
+export function recentLetterLines(store: JobStore, jobId: number, language: OutputLanguage, count: number, now: Date): RecentLetter[] {
+  if (count <= 0) return [];
+  const since = new Date(now.getTime() - EARLIER_LETTERS_DAYS * 86_400_000).toISOString();
+  const seen = new Set<string>();
+  const lines: RecentLetter[] = [];
+  for (const app of store.recentApplications(jobId, since)) {
+    const c = app.content as Partial<TailoredContent>;
+    if (!c.coverLetter?.paragraphs?.length || c.letterLanguage !== language) continue;
+    const line = { opening: firstSentence(c.coverLetter.paragraphs[0]!), closing: (c.coverLetter.closing ?? '').trim().slice(0, 240) };
+    // The same lines twice teach nothing more.
+    const key = `${line.opening}\u0000${line.closing}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(line);
+    if (lines.length === count) break;
+  }
+  return lines;
+}
 
 /**
  * Compares the cover letter with your recent letters to other jobs and adds a warning for each repeat.

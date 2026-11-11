@@ -42,8 +42,13 @@ export const TailorConfigSchema = z.object({
       style: z.string().default('Direct and specific. Short sentences. Confident without hype.'),
       /** Phrases the letter must not use. */
       avoid: z.array(z.string()).default([]),
+      /**
+       * How many of your latest cover letters the writer is shown the opening and closing of, so a new
+       * letter doesn't start or end the same way. 0 turns it off.
+       */
+      varyFromRecent: z.number().int().min(0).max(10).default(5),
     })
-    .default({ maxWords: 280, signOff: { en: 'Best regards', he: 'בברכה', ru: 'С уважением' }, style: 'Direct and specific. Short sentences. Confident without hype.', avoid: [] }),
+    .default({ maxWords: 280, signOff: { en: 'Best regards', he: 'בברכה', ru: 'С уважением' }, style: 'Direct and specific. Short sentences. Confident without hype.', avoid: [], varyFromRecent: 5 }),
   pdf: z
     .object({
       enabled: z.boolean().default(true),

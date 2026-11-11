@@ -85,7 +85,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `.env` setting | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | Required for scoring, tailoring, lookups and CV upload. |
-| `SCOUT_ADVISOR_MODEL` | A stronger model the Claude scorer consults on borderline postings (provisional score 50–80, or an unclear requirement), at most once per job. Default `claude-opus-5-5`; `off` turns it off. Not used with a local model. |
+| `SCOUT_ADVISOR_MODEL` | A stronger model the Claude scorer consults on borderline postings (provisional score 50–80, or 40–90 in a batch run, or an unclear requirement), at most once per job. Default `claude-opus-5-5`; `off` turns it off. Not used with a local model. |
 | `SCOUT_MODEL`, `TAILOR_MODEL`, `ENRICH_MODEL` | Models for scoring, tailoring/form answers, and web lookups. `claude-haiku-5-5` is much cheaper for scoring; `ollama:gemma3:12b` scores for free on your Mac (see [Local models](#local-models-ollama)). |
 | `ARCHIVER_MODEL` | The local model that reads your email for the Archiver. Default `ollama:gemma3:12b`. |
 | `OLLAMA_URL` | Where Ollama listens. Default `http://127.0.0.1:11434`. |
@@ -440,7 +440,11 @@ usually within the hour and 24 hours at most. It suits runs nobody is waiting on
   applied to, removed or dismissed is ignored.
 - Anything a batch couldn't score (a request that failed or expired, or a batch that couldn't be sent)
   is scored right away at the normal price.
-- The advisor is asked the same way inside a batch. A local model ignores `--batch`: it's free already.
+- The advisor is asked inside a batch too, and over a wider range of scores: 40 to 90 instead of 50 to
+  80 (`scoring.batchAdvisorBand` and `scoring.advisorBand`). A consultation costs half in a batch, so
+  the wider range comes to about the same advisor spend as a live run, for a second opinion on more of
+  the close calls.
+- A local model ignores `--batch`: it's free already.
 
 ### Archiver
 
@@ -494,7 +498,9 @@ and that email is read on the next run. **Check email now** on the Applications 
    **Redo using the terms your CV backs up** fills in a note for the Tailor. Terms your CV doesn't show
    are never added: the fact-check still applies.
 7. **Repeated letters.** Recruiters and AI-screening tools spot mass-produced letters by their repeated
-   prose: the same opening, the same closing line, a paragraph with only the company name swapped. Each
+   prose: the same opening, the same closing line, a paragraph with only the company name swapped. The
+   writer is shown how your latest five letters to other jobs (in the same language) opened and closed,
+   and told to start and end this one differently (`coverLetter.varyFromRecent`; 0 turns it off). Then each
    new letter is compared with your letters to other jobs from the last 90 days (locally, no cost).
    Wording copied from your CV doesn't count, since restating your facts is expected. When 30% of the
    letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
@@ -554,7 +560,7 @@ Measured or estimated with the default models:
 | Step | Cost |
 |---|---|
 | Scoring | about 0.1¢ per job with Haiku 5.5, more with Sonnet; half that with `--batch` |
-| Scoring advisor (borderline jobs only) | about 3–7¢ per consultation with Opus 5.5 (the first in a run writes its cache) |
+| Scoring advisor (borderline jobs only) | about 3–7¢ per consultation with Opus 5.5 (the first in a run writes its cache); half that in a batch, which asks over a wider range |
 | Web lookup for a shortlisted alert job | about 10¢ each (capped by `enrich.maxPerRun`) |
 | Tailoring | about 10–30¢ per application |
 | Submitter | a few cents per application, only for questions it answers itself |

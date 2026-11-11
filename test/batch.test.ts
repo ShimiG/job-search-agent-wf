@@ -66,6 +66,25 @@ describe('batch scoring: the Claude scorer', () => {
     assert.deepEqual([params.tools[0]!.type, params.tools[0]!.model, params.max_tokens], ['advisor_20260301', 'claude-opus-5-5', 2048]);
   });
 
+  it('asks the advisor over a wider range of scores in a batch than live, both set in preferences', async () => {
+    const system = async (prefs = makePrefs()) => {
+      const c = client('in_progress');
+      let live = '';
+      const both = { ...c, beta: { messages: { ...c.beta.messages, parse: async (req: { system: Array<{ text: string }> }) => ((live = req.system[0]!.text), { stop_reason: 'end_turn', parsed_output: raw }) } } };
+      const scorer = new AnthropicScorer({ cv, prefs, model: 'claude-haiku-5-5', advisor: 'claude-opus-5-5', client: both as never });
+      await scorer.score(makeJob());
+      await scorer.batch.submit([{ ...makeJob(), id: 7 }]);
+      return { live, batch: (c.calls[0]!.body.requests[0]!.params as { system: Array<{ text: string }> }).system[0]!.text };
+    };
+    const defaults = await system();
+    assert.match(defaults.live, /between 50 and 80,[\s\S]*Below 50 or above 80/);
+    assert.match(defaults.batch, /between 40 and 90,[\s\S]*Below 40 or above 90/);
+    const custom = await system(makePrefs({ scoring: { advisorBand: [55, 75], batchAdvisorBand: [30, 95] } }));
+    assert.match(custom.live, /between 55 and 75/);
+    assert.match(custom.batch, /between 30 and 95/);
+    assert.throws(() => makePrefs({ scoring: { advisorBand: [80, 50] } }), /from no higher than to/);
+  });
+
   it('reads scores from an ended batch at half price, and says which requests never ran', async () => {
     const store = new JobStore(':memory:');
     const ids = [1, 2, 3, 4].map((n) => store.upsert(makeJob({ externalId: `acme:${n}` }), NOW.toISOString()).id);
