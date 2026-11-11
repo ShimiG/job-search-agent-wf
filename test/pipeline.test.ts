@@ -129,6 +129,19 @@ describe('runScout', () => {
     assert.equal(store.get(earlier)!.duplicateOf, first!.id);
   });
 
+  it('skips listings of jobs you dismissed, from any board', async () => {
+    await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
+    const [first] = store.listByStatus(['shortlisted']);
+    store.setStatus(first!.id, 'dismissed', null, 'user', clock.toISOString());
+    scorer.calls = [];
+
+    clock = new Date('2026-10-16T08:00:00Z');
+    const stats = await runScout(deps([board('greenhouse:acme', () => [atsJob('1', 'Great Automation Engineer')])]));
+    assert.equal(stats.appliedListings, 1);
+    assert.deepEqual(scorer.calls, []);
+    assert.deepEqual(store.listByStatus(['shortlisted']), []);
+  });
+
   it('replaces an alert-email job when the full posting shows up later', async () => {
     await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
     const [fromEmail] = store.listByStatus(['shortlisted']);

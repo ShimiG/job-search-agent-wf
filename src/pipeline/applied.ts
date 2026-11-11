@@ -17,6 +17,8 @@ export interface AppliedStats {
 export const APPLIED_STATUSES: readonly JobStatus[] = ['submitted'];
 /** On its way to being sent: another listing of it would mean applying twice. */
 export const IN_PROGRESS_STATUSES: readonly JobStatus[] = ['selected', 'tailored', 'tailor_error', 'approved', 'needs_manual'];
+/** You said no to this job: another listing of it is no more welcome. */
+export const DISMISSED_STATUSES: readonly JobStatus[] = ['dismissed'];
 /** Listings still in Scout's hands, which the sweep below may take off. */
 const SWEPT_STATUSES: readonly JobStatus[] = ['discovered', 'queued', 'score_error', 'low_score', 'shortlisted'];
 
@@ -44,17 +46,22 @@ export function normalizeJobUrl(raw: string | null | undefined): string | null {
   }
 }
 
-const listingUrls = (job: Pick<Listing, 'url' | 'postingUrl'>) =>
-  [job.url, job.postingUrl].map(normalizeJobUrl).filter((u): u is string => u !== null);
+/**
+ * Same job page? A listing's own address (url) is always one job's page. A looked-up one (postingUrl)
+ * might be a general careers page, so two looked-up addresses alone never make a match.
+ */
+function samePage(a: Pick<Listing, 'url' | 'postingUrl'>, b: Pick<Listing, 'url' | 'postingUrl'>): boolean {
+  const [aUrl, aPosting, bUrl, bPosting] = [a.url, a.postingUrl, b.url, b.postingUrl].map(normalizeJobUrl);
+  return (aUrl !== null && (aUrl === bUrl || aUrl === bPosting)) || (aPosting !== null && aPosting === bUrl);
+}
 
 /**
- * Is `job` a listing of the job you applied to? Looser than dedupe on purpose: the same page address,
+ * Is `job` a listing of the job you applied to? Looser than dedupe on purpose: the same job page,
  * or the same company and title, unless both come from one board (or one alert feed) with different
  * locations, which is a separate opening. Confirmation emails carry no location, so that never blocks.
  */
 export function isListingOfApplied(applied: Listing, job: Listing): boolean {
-  const urls = new Set(listingUrls(applied));
-  if (listingUrls(job).some((u) => urls.has(u))) return true;
+  if (samePage(applied, job)) return true;
   if (!applied.normCompany || applied.normCompany === UNKNOWN_COMPANY || applied.normCompany !== job.normCompany) return false;
   if (!isSameTitle(applied.normTitle, job.normTitle)) return false;
   if (!applied.location.trim() || !job.location.trim() || origin(applied) !== origin(job)) return true;
@@ -140,34 +147,37 @@ export interface SweepStats {
   applied: number;
   /** Listings of jobs the Tailor or Submitter are already working on. */
   inProgress: number;
+  /** Listings of jobs you dismissed. */
+  dismissed: number;
 }
 
 /**
- * Takes every listing of a job you've applied to (or are applying to) out of Scout's hands, before it's
- * filtered or scored: a re-post, the same job from another board or alert feed, or a row you had on your
- * shortlist when you applied elsewhere. Each becomes a duplicate of the applied job, so it stays out of
+ * Takes every listing of a job you've applied to, are applying to, or dismissed out of Scout's hands,
+ * before it's filtered or scored: a re-post, the same job from another board or alert feed, or a row you
+ * had on your shortlist when you applied elsewhere. Each becomes a duplicate of the applied job, so it stays out of
  * every list and is never scored or picked again. Safe to run any number of times.
  */
 export function sweepAppliedListings(store: JobStore, now: string): SweepStats {
-  const stats: SweepStats = { applied: 0, inProgress: 0 };
-  // Applied first, so a listing matching both is filed under the job you actually sent.
-  const taken = [...store.listByStatus(APPLIED_STATUSES, { includeClosed: true }), ...store.listByStatus(IN_PROGRESS_STATUSES, { includeClosed: true })];
+  const stats: SweepStats = { applied: 0, inProgress: 0, dismissed: 0 };
+  // In this order, so a listing matching several is filed under the job you actually sent.
+  const taken = [APPLIED_STATUSES, IN_PROGRESS_STATUSES, DISMISSED_STATUSES].flatMap((statuses) => store.listByStatus(statuses, { includeClosed: true }));
   if (taken.length === 0) return stats;
 
   const byCompany = new Map<string, JobRow[]>();
-  const byUrl = new Map<string, JobRow>();
+  const byPage = new Map<string, JobRow[]>();
   const titleOnly: JobRow[] = [];
   for (const job of taken) {
     if (job.normCompany === UNKNOWN_COMPANY) titleOnly.push(job);
     else byCompany.set(job.normCompany, [...(byCompany.get(job.normCompany) ?? []), job]);
-    for (const url of listingUrls(job)) if (!byUrl.has(url)) byUrl.set(url, job);
+    for (const url of new Set([job.url, job.postingUrl].map(normalizeJobUrl))) {
+      if (url) byPage.set(url, [...(byPage.get(url) ?? []), job]);
+    }
   }
 
   const listings = store.listByStatus(SWEPT_STATUSES);
   for (const job of listings) {
-    let match = listingUrls(job)
-      .map((u) => byUrl.get(u))
-      .find(Boolean);
+    const pages = [job.url, job.postingUrl].map(normalizeJobUrl).flatMap((u) => (u ? (byPage.get(u) ?? []) : []));
+    let match = pages.find((a) => samePage(a, job));
     match ??= byCompany.get(job.normCompany)?.find((a) => isListingOfApplied(a, job));
     // Indeed's confirmations name the job but not the company: accept the one Indeed listing with that title.
     if (!match && origin(job) === 'indeed') {
@@ -177,13 +187,14 @@ export function sweepAppliedListings(store: JobStore, now: string): SweepStats {
     }
     if (!match) continue;
 
-    const applied = APPLIED_STATUSES.includes(match.status);
-    const reason = applied
-      ? `you already applied to this job (#${match.id}${match.statusReason ? `: ${match.statusReason}` : ''})`
-      : `already being applied to as #${match.id} (${match.status.replace('_', ' ')})`;
+    const kind = APPLIED_STATUSES.includes(match.status) ? 'applied' : DISMISSED_STATUSES.includes(match.status) ? 'dismissed' : 'inProgress';
+    const reason = {
+      applied: `you already applied to this job (#${match.id}${match.statusReason ? `: ${match.statusReason}` : ''})`,
+      inProgress: `already being applied to as #${match.id} (${match.status.replace('_', ' ')})`,
+      dismissed: `you dismissed this job (#${match.id}${match.statusReason ? `: ${match.statusReason}` : ''})`,
+    }[kind];
     store.setStatus(job.id, 'duplicate', reason, 'scout', now, { duplicateOf: match.id });
-    if (applied) stats.applied++;
-    else stats.inProgress++;
+    stats[kind]++;
   }
   return stats;
 }

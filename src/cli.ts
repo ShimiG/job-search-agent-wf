@@ -20,6 +20,7 @@ import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { AnthropicScorer } from './llm/scorer.ts';
 import { appliedEmailsSource } from './sources/applications.ts';
 import { formatJobDetail, formatJobList, formatMarkdown, formatRunStats } from './output/report.ts';
+import { sweepAppliedListings } from './pipeline/applied.ts';
 import { runScout } from './pipeline/run.ts';
 import { createBoardAdapter } from './sources/ats.ts';
 import type { SourceAdapter } from './sources/common.ts';
@@ -168,6 +169,9 @@ function commandTransition(paths: Paths, ids: number[], to: 'selected' | 'dismis
       store.setStatus(id, to, null, 'user', now);
       console.log(`#${id}: ${job.company} — ${job.title} → ${to}`);
     }
+    const swept = sweepAppliedListings(store, now);
+    const others = swept.applied + swept.inProgress + swept.dismissed;
+    if (others) console.log(`${others} other listing(s) of these jobs removed from Scout.`);
   } finally {
     store.close();
   }

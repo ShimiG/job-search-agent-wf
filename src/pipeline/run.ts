@@ -39,7 +39,7 @@ export interface RunStats {
   closed: number;
   /** Jobs marked as applied from your confirmation emails (matched + added). */
   alreadyApplied: number;
-  /** Listings taken off because you already applied to that job, or it's already on its way to being sent. */
+  /** Listings taken off because you already applied to that job, it's on its way to being sent, or you dismissed it. */
   appliedListings: number;
   evaluated: number;
   filteredOut: number;
@@ -195,15 +195,19 @@ async function markApplied(deps: RunDeps, stats: RunStats, iso: () => string) {
 
 /**
  * Step 1c: listings of jobs you've already applied to (by the Submitter, or yourself, from confirmation
- * emails) or are applying to leave Scout before filtering and scoring, so they cost nothing and never
- * reach your shortlist. Also clears ones already on it when you applied somewhere else.
+ * emails), are applying to, or dismissed leave Scout before filtering and scoring, so they cost nothing
+ * and never reach your shortlist. Also clears ones already on it when you applied somewhere else.
  */
 function removeAppliedListings(deps: RunDeps, stats: RunStats, iso: () => string) {
   const result = deps.store.db.transaction(() => sweepAppliedListings(deps.store, iso()))();
-  const removed = result.applied + result.inProgress;
+  const removed = result.applied + result.inProgress + result.dismissed;
   if (!removed) return;
   stats.appliedListings += removed;
-  const parts = [result.applied && `${result.applied} you already applied to`, result.inProgress && `${result.inProgress} already being applied to`].filter(Boolean);
+  const parts = [
+    result.applied && `${result.applied} you already applied to`,
+    result.inProgress && `${result.inProgress} already being applied to`,
+    result.dismissed && `${result.dismissed} you dismissed`,
+  ].filter(Boolean);
   deps.logger.info(`Skipped ${removed} listing(s) of jobs ${parts.join(', ')}`);
 }
 
