@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, imapCredentialsFromEnv, loadJsonFile, resolvePaths } from '../config.ts';
 import { JobStore } from '../db/store.ts';
+import { CostMeter } from '../llm/cost.ts';
 import { TailorConfigSchema } from '../tailor/schema.ts';
 import { createLogger } from '../util/logger.ts';
 import { AnthropicFieldMapper } from './llm.ts';
@@ -89,7 +90,8 @@ async function main() {
       }
       const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
       const tailor = loadJsonFile(paths.tailor, TailorConfigSchema);
-      const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL }) : null;
+      const meter = new CostMeter('submitter');
+      const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL, meter }) : null;
       if (!mapper) logger.warn('ANTHROPIC_API_KEY not set: unusual questions will be left for you');
       const imap = imapCredentialsFromEnv();
       if (!imap) logger.warn('IMAP_USER / IMAP_PASSWORD not set: emailed security codes will be left for you');
@@ -98,7 +100,7 @@ async function main() {
       try {
         const jobIds = values.job ? values.job.split(',').map(parseId) : undefined;
         const stats = await runSubmitter(
-          { store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, onAssist: printAssist, codes: imap ? createImapCodeSource(imap, logger) : null },
+          { store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, meter, onAssist: printAssist, codes: imap ? createImapCodeSource(imap, logger) : null },
           mode,
           { jobIds },
         );

@@ -1,3 +1,4 @@
+import { FALLBACK_MODEL, tokenCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { looksClosed } from '../pipeline/closed.ts';
@@ -32,6 +33,8 @@ export interface EnrichUsage {
   outputTokens: number;
   searches: number;
   fetches: number;
+  /** The model that ran the lookup, for pricing. */
+  model?: string;
 }
 
 export interface Enricher {
@@ -185,22 +188,26 @@ export function checkReport(
   };
 }
 
-/** Dollars, at Sonnet 5.5 rates: $2 / $10 per million tokens, $10 per thousand searches. */
+/** Dollars for one lookup, at the rates of the model that ran it (Sonnet 5.5 when not recorded). */
 export function enrichCost(u: EnrichUsage): number {
-  return (u.inputTokens * 2 + u.cacheReadTokens * 0.2 + u.cacheWriteTokens * 2.5 + u.outputTokens * 10) / 1e6 + u.searches * 0.01;
+  return tokenCost(u.model ?? FALLBACK_MODEL, { ...u, webSearches: u.searches });
 }
 
 export class AnthropicEnricher implements Enricher {
   private readonly client: Pick<Anthropic, 'beta'>;
   readonly model: string;
 
-  constructor(opts: { model?: string; apiKey?: string; client?: Pick<Anthropic, 'beta'> } = {}) {
+  private readonly meter?: CostMeter;
+
+  constructor(opts: { model?: string; apiKey?: string; client?: Pick<Anthropic, 'beta'>; meter?: CostMeter } = {}) {
     this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 3, timeout: 180_000 });
     this.model = opts.model ?? 'claude-sonnet-5-5';
+    this.meter = opts.meter;
   }
 
   async find(job: Pick<JobRow, 'title' | 'company' | 'location' | 'url'>) {
-    const usage: EnrichUsage = { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, searches: 0, fetches: 0 };
+    const usage: EnrichUsage = { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, searches: 0, fetches: 0, model: this.model };
+    const jobId = (job as { id?: unknown }).id;
     const messages: Anthropic.Beta.BetaMessageParam[] = [
       {
         role: 'user',
@@ -228,6 +235,7 @@ export class AnthropicEnricher implements Enricher {
         ],
         messages,
       });
+      this.meter?.record('lookup', this.model, message.usage, typeof jobId === 'number' ? jobId : null);
       usage.inputTokens += message.usage.input_tokens;
       usage.cacheReadTokens += message.usage.cache_read_input_tokens ?? 0;
       usage.cacheWriteTokens += message.usage.cache_creation_input_tokens ?? 0;

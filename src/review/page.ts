@@ -306,6 +306,15 @@ export const PAGE = String.raw`<!doctype html>
     return card;
   }
 
+  function money(d) { return d < 0.01 ? '<$0.01' : '$' + d.toFixed(2); }
+  // What Claude calls for this job have cost so far: scoring, lookup, tailoring, form answers.
+  function spentTag(j) {
+    if (!j.spent) return [];
+    var t = el('span', 'tag', money(j.spent));
+    t.title = 'Claude calls for this job so far: scoring, looking it up, tailoring and form answers';
+    return [t];
+  }
+
   function docTags(j) {
     var out = [];
     if (!j.docs) return out;
@@ -597,7 +606,7 @@ export const PAGE = String.raw`<!doctype html>
           t.title = kw.matched + " of the posting's " + kw.total + ' key terms appear in this CV word for word';
           tags.push(t);
         }
-        root.appendChild(jobCard(j, { select: ui.approve, tags: tags, extra: extra, after: after, summary: false }));
+        root.appendChild(jobCard(j, { select: ui.approve, tags: tags.concat(spentTag(j)), extra: extra, after: after, summary: false }));
       });
     } else if (ui.tab === 'sending') {
       list = d.sending; renderToolbar(list, null);
@@ -657,7 +666,7 @@ export const PAGE = String.raw`<!doctype html>
           j.last.modelAnswers.forEach(function (a) { ul.appendChild(el('li', null, a.label + ' (' + a.kind + '): ' + a.value)); });
           box.appendChild(ul); after.push(box);
         }
-        root.appendChild(jobCard(j, { tags: [el('span', 'tag good', 'sent ' + time(j.last.at))], extra: extra, after: after, summary: false, details: false }));
+        root.appendChild(jobCard(j, { tags: [el('span', 'tag good', 'sent ' + time(j.last.at))].concat(spentTag(j)), extra: extra, after: after, summary: false, details: false }));
       });
     }
     if (ui.tab === 'cv') { $('toolbar').textContent = ''; renderCv(root); renderActions(d); return; }
@@ -681,8 +690,35 @@ export const PAGE = String.raw`<!doctype html>
     });
     t.appendChild(body); wrap.appendChild(t); return wrap;
   }
+  function spendingPanel(s) {
+    var p = el('div', 'panel'); p.appendChild(el('h3', null, 'What it costs'));
+    if (!s || !s.since) { p.appendChild(el('p', 'note', 'Nothing recorded yet. Costs of Claude calls are recorded from the next run on.')); return p; }
+    var line = el('p'); line.appendChild(el('span', 'big', money(s.last30Days))); line.appendChild(document.createTextNode('in the last 30 days'));
+    p.appendChild(line);
+    var parts = [money(s.total) + ' since ' + s.since.slice(0, 10)];
+    if (s.perApplication !== null) parts.push('about ' + money(s.perApplication) + ' per application sent (' + s.applications + ')');
+    if (s.perCallback !== null) parts.push(money(s.perCallback) + ' per callback (' + s.callbacks + ')');
+    p.appendChild(el('p', 'note', parts.join(', ') + '.'));
+    if (s.byPurpose.length) {
+      var wrap = el('div', 'table-wrap'), t = el('table', 'stats'), head = el('tr');
+      ['Last 30 days', 'Calls', 'Cost'].forEach(function (h) { var th = el('th', null, h); th.scope = 'col'; head.appendChild(th); });
+      var thead = el('thead'); thead.appendChild(head); t.appendChild(thead);
+      var body = el('tbody');
+      s.byPurpose.forEach(function (x) {
+        var tr = el('tr'); [x.label.charAt(0).toUpperCase() + x.label.slice(1), x.calls, money(x.cost)].forEach(function (v) { tr.appendChild(el('td', null, String(v))); });
+        body.appendChild(tr);
+      });
+      t.appendChild(body); wrap.appendChild(t); p.appendChild(wrap);
+    }
+    p.appendChild(el('p', 'note', 'Per application and per callback include everything, such as scoring jobs you skipped. Estimated from token counts at list prices; your Anthropic console has the exact bill.'));
+    return p;
+  }
   function renderResults(root, r) {
-    if (!r || !r.total.applied) { root.appendChild(el('p', 'empty', 'No applications yet. Once you apply, replies from your inbox show up here.')); return; }
+    if (!r || !r.total.applied) {
+      root.appendChild(el('p', 'empty', 'No applications yet. Once you apply, replies from your inbox show up here.'));
+      if (r && r.spending && r.spending.since) root.appendChild(spendingPanel(r.spending));
+      return;
+    }
     var t = r.total, top = el('div', 'panel');
     var line = el('p'); line.appendChild(el('span', 'big', pct(t.rate))); line.appendChild(document.createTextNode('callback rate'));
     top.appendChild(line);
@@ -692,6 +728,7 @@ export const PAGE = String.raw`<!doctype html>
     [['By source', r.bySource], ['By score', r.byScore], ['By how you applied', r.byMethod]].forEach(function (x) {
       var p = el('div', 'panel'); p.appendChild(el('h3', null, x[0])); p.appendChild(statsTable(x[0].replace('By ', '').replace(/^./, function (c) { return c.toUpperCase(); }), x[1])); root.appendChild(p);
     });
+    root.appendChild(spendingPanel(r.spending));
     var latest = el('div', 'panel'); latest.appendChild(el('h3', null, 'Latest replies'));
     if (!r.recent.length) latest.appendChild(el('p', 'note', 'No replies found yet.'));
     else {

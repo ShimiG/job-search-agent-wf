@@ -1,3 +1,4 @@
+import type { CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -113,17 +114,21 @@ export interface AnthropicScorerOptions {
   model?: string;
   apiKey?: string;
   client?: Pick<Anthropic, 'messages'>;
+  /** Records what each call costs. */
+  meter?: CostMeter;
 }
 
 export class AnthropicScorer implements Scorer {
   private readonly client: Pick<Anthropic, 'messages'>;
   private readonly model: string;
   private readonly profile: string;
+  private readonly meter?: CostMeter;
 
   constructor(opts: AnthropicScorerOptions) {
     this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 4, timeout: 60_000 });
     this.model = opts.model ?? 'claude-sonnet-5-5';
     this.profile = buildCandidateProfile(opts.cv, opts.prefs);
+    this.meter = opts.meter;
   }
 
   async score(job: NormalizedJob): Promise<ScoreResult> {
@@ -139,6 +144,8 @@ export class AnthropicScorer implements Scorer {
       messages: [{ role: 'user', content: buildJobPrompt(job) }],
       output_config: { format: zodOutputFormat(ScoreSchema) },
     });
+    const jobId = (job as { id?: unknown }).id;
+    this.meter?.record('score', this.model, message.usage, typeof jobId === 'number' ? jobId : null);
     if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
     if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');
     if (!message.parsed_output) throw new Error('Model returned no structured output');

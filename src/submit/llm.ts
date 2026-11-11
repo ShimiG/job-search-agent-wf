@@ -1,3 +1,4 @@
+import type { CostMeter } from '../llm/cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -59,7 +60,10 @@ export class AnthropicFieldMapper implements FieldMapper {
   private readonly client: Pick<Anthropic, 'messages'>;
   readonly model: string;
 
-  constructor(opts: { model?: string; client?: Pick<Anthropic, 'messages'> } = {}) {
+  private readonly meter?: CostMeter;
+
+  constructor(opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {}) {
+    this.meter = opts.meter;
     this.client = opts.client ?? new Anthropic({ maxRetries: 4, timeout: 90_000 });
     this.model = opts.model ?? 'claude-sonnet-5-5';
   }
@@ -90,6 +94,7 @@ export class AnthropicFieldMapper implements FieldMapper {
       ],
       output_config: { format: zodOutputFormat(MapperSchema) },
     });
+    this.meter?.record('form', this.model, message.usage);
     if (message.stop_reason === 'refusal') throw new Error('Model declined to map the form');
     if (!message.parsed_output) throw new Error('Model returned no structured output');
     return message.parsed_output.answers;

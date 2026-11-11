@@ -14,6 +14,7 @@ import {
   type Paths,
 } from './config.ts';
 import { JobStore } from './db/store.ts';
+import { CostMeter } from './llm/cost.ts';
 import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
@@ -23,6 +24,7 @@ import { formatJobDetail, formatJobList, formatMarkdown, formatRunStats } from '
 import { sweepAppliedListings } from './pipeline/applied.ts';
 import { formatOutcomeReport, outcomeReport } from './pipeline/outcomes.ts';
 import { runScout } from './pipeline/run.ts';
+import { formatSpendingReport, spendingReport } from './pipeline/spending.ts';
 import { createBoardAdapter } from './sources/ats.ts';
 import type { SourceAdapter } from './sources/common.ts';
 import { DEFAULT_FEEDS, createEmailAlertAdapter } from './sources/email-alerts.ts';
@@ -47,7 +49,7 @@ Commands:
   pick <id...>                 Send jobs to the Tailor agent (status → selected)
   dismiss <id...>              Drop jobs you don't want (status → dismissed)
   sources                      Configured sources and their last fetch result
-  results                      Callback rates: replies to your applications, by source, score and how you applied
+  results                      Callback rates (by source, score and how you applied) and what the search has cost
   add-source <careers-url> [--company "Name"] [--token T]
                                Detect the ATS from a careers URL and add it to sources.json
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
@@ -101,18 +103,19 @@ function buildAdapters(paths: Paths, logger: Logger): SourceAdapter[] {
 async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   let scorer: AnthropicScorer | undefined;
+  const meter = new CostMeter('scout');
   if (!noScore) {
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env, or run with --no-score to skip scoring.');
     }
     const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
-    scorer = new AnthropicScorer({ cv, prefs, model: process.env.SCOUT_MODEL });
+    scorer = new AnthropicScorer({ cv, prefs, model: process.env.SCOUT_MODEL, meter });
   }
   const store = new JobStore(paths.db);
   try {
     const { applied, replies } = applicationMailSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
-    const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher });
+    const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
+    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher, meter });
     console.log('\n' + formatRunStats(stats));
     const shortlist = store.listByStatus(['shortlisted']);
     if (shortlist.length) console.log(`\n${shortlist.length} jobs on your shortlist. See them with: npm run scout -- list`);
@@ -332,6 +335,7 @@ async function main() {
       const store = new JobStore(paths.db);
       try {
         console.log(formatOutcomeReport(outcomeReport(store)));
+        console.log('\n' + formatSpendingReport(spendingReport(store)));
       } finally {
         store.close();
       }

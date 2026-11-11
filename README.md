@@ -195,6 +195,14 @@ an interview followed by a rejection still counts. Applications from the last 14
 waiting and left out of the rate. Use it to tune your score cutoffs and drop sources that never answer.
 Turn it off with `"trackReplies": false`; `repliesSinceDays` (default 90) sets how far back to read.
 
+**What it costs.** Every Claude call is recorded with its token counts and priced at list rates for the
+model that ran it: scoring, web lookups, tailoring, fact-checking, form answers, pasted links and CV
+uploads. Each run's summary ends with its cost; the Results tab and `npm run scout -- results` show the
+last 30 days by purpose, the total, and the all-in cost per application sent and per callback (scoring
+jobs you skipped is part of what an application costs). Cards in Ready to send and Sent show what that
+job has cost so far. Figures are estimates from token counts; your Anthropic console has the exact
+bill. Prices live in `src/llm/cost.ts`: a model that isn't listed there is priced as Sonnet 5.5.
+
 ## The review page
 
 ```bash
@@ -208,7 +216,7 @@ npm run review               # http://127.0.0.1:4100
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Sent** | The last 14 days, with every answer Claude wrote on each form. |
-| **Results** | Your callback rate, by source, score band and how you applied, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
+| **Results** | Your callback rate, by source, score band and how you applied, what the search has cost, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
 
 **Paste a link** to the company's own page for a job (from LinkedIn's Apply button, a careers site…).

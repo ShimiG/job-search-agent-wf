@@ -1,3 +1,4 @@
+import { withJob, type CostMeter } from '../llm/cost.ts';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MasterCv } from '../config.ts';
@@ -25,6 +26,8 @@ export interface TailorDeps {
   logger: Logger;
   model?: string;
   clock?: () => Date;
+  /** The meter the writer and verifier report to; stored with this run. */
+  meter?: CostMeter;
 }
 
 export function decideLanguages(job: JobRow, cfg: TailorConfig): { cvLanguage: OutputLanguage; letterLanguage: OutputLanguage } {
@@ -265,6 +268,8 @@ export interface TailorRunStats {
   tailored: number;
   needsReview: number;
   errors: Array<{ jobId: number; error: string }>;
+  /** Dollars spent on Claude this run, when a meter was given. */
+  cost?: number;
 }
 
 export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = {}): Promise<TailorRunStats> {
@@ -279,11 +284,12 @@ export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = 
   }
 
   const runId = store.startRun('tailor', new Date().toISOString());
+  deps.meter?.attach(store, runId);
   for (const job of jobs) {
     stats.attempted++;
     logger.info(`#${job.id}: tailoring for ${job.company} — ${job.title}`);
     try {
-      const { report, app } = await tailorJob(job, deps);
+      const { report, app } = await withJob(job.id, () => tailorJob(job, deps));
       stats.tailored++;
       if (!report.ok) stats.needsReview++;
       logger.info(`#${job.id}: v${app.version} written to ${app.dir}${report.ok ? '' : ' (needs review)'}`);
@@ -294,6 +300,8 @@ export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = 
       logger.warn(`#${job.id}: tailoring failed: ${message}`);
     }
   }
+  if (deps.meter) stats.cost = deps.meter.totals().total;
+  deps.meter?.detach();
   store.finishRun(runId, stats, new Date().toISOString());
   return stats;
 }

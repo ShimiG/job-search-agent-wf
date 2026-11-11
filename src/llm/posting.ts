@@ -1,3 +1,4 @@
+import { usageCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -126,20 +127,23 @@ export function sameTitle(a: string, b: string): boolean {
 export async function extractPosting(
   pageText: string,
   job: Pick<JobRow, 'title' | 'company'>,
-  opts: { model?: string; client?: Pick<Anthropic, 'messages'> } = {},
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<Exclude<LinkResult, { finalUrl: string }> | { ok: true; posting: PagePosting; cost: number }> {
   if (looksClosed(pageText.slice(0, 20_000))) return { ok: false, closed: true, reason: 'the page says this job is no longer accepting applications', cost: 0 };
   if (pageText.length < 200) return { ok: false, reason: 'the page has almost no text (it may need a login)', cost: 0 };
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
+  const model = opts.model ?? 'claude-sonnet-5-5';
   const message = await client.messages.parse({
-    model: opts.model ?? 'claude-sonnet-5-5',
+    model,
     max_tokens: 8000,
     system: INSTRUCTIONS,
     messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
     output_config: { format: zodOutputFormat(Extract), effort: 'low' },
   });
-  const u = message.usage;
-  const cost = ((u.input_tokens + (u.cache_creation_input_tokens ?? 0)) * 2 + (u.cache_read_input_tokens ?? 0) * 0.2 + u.output_tokens * 10) / 1e6;
+  const jobId = (job as { id?: unknown }).id;
+  const cost = opts.meter
+    ? opts.meter.record('posting', model, message.usage, typeof jobId === 'number' ? jobId : null)
+    : usageCost(model, message.usage);
   const x = message.parsed_output;
   if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the page could not be read', cost };
   if (!x.is_job_posting) return { ok: false, reason: "the page isn't a single job posting (a job list, a login or an error page?)", cost };
@@ -166,7 +170,7 @@ export async function extractPosting(
 export async function postingFromLink(
   url: string,
   job: Pick<JobRow, 'title' | 'company'>,
-  opts: { model?: string; browserPath?: string; client?: Pick<Anthropic, 'messages'> } = {},
+  opts: { model?: string; browserPath?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<LinkResult> {
   const bad = checkLink(url);
   if (bad) return { ok: false, reason: bad, cost: 0 };

@@ -1,3 +1,4 @@
+import { usageCost, type CostMeter } from '../llm/cost.ts';
 import { inflateSync } from 'node:zlib';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
@@ -131,7 +132,7 @@ export function toMasterCv(x: Extracted, source: string): Omit<CvImport, 'cost'>
 
 export async function importCv(
   file: { data: Buffer; kind: 'pdf' | 'docx' },
-  opts: { model?: string; client?: Pick<Anthropic, 'messages'> } = {},
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<CvImport> {
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 180_000 });
   const model = opts.model ?? 'claude-sonnet-5-5';
@@ -155,7 +156,6 @@ export async function importCv(
   if (message.stop_reason === 'refusal') throw new Error('The model declined to read this file.');
   if (message.stop_reason === 'max_tokens') throw new Error('The CV is too long to convert in one go.');
   if (!message.parsed_output) throw new Error('The model returned no CV.');
-  const u = message.usage;
-  const cost = ((u.input_tokens + (u.cache_creation_input_tokens ?? 0)) * 2 + (u.cache_read_input_tokens ?? 0) * 0.2 + u.output_tokens * 10) / 1e6;
+  const cost = opts.meter ? opts.meter.record('cv', model, message.usage) : usageCost(model, message.usage);
   return { ...toMasterCv(message.parsed_output, text || message.parsed_output.transcript), cost };
 }
