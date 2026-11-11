@@ -8,10 +8,12 @@ import type { Logger } from '../util/logger.ts';
 import { mapWithConcurrency } from '../util/limiter.ts';
 import { enrichCost, type Enricher } from '../llm/enrich.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
+import type { ReplyEmail } from '../sources/replies.ts';
 import { linkedinIdClock, linkedinJobId } from './age.ts';
 import { checkPostingPage, type PageCheck } from './closed.ts';
 import { recordApplications, sweepAppliedListings } from './applied.ts';
 import { decideDuplicate } from './dedupe.ts';
+import { recordReplies, type ReplyStats } from './outcomes.ts';
 import { applyHardFilters } from './filters.ts';
 
 export interface RunDeps {
@@ -24,6 +26,8 @@ export interface RunDeps {
   scorer?: Scorer;
   /** Confirmation emails for applications you sent yourself. */
   applied?: () => Promise<AppliedEmail[]>;
+  /** Replies to your applications (interviews, assignments, offers, rejections). */
+  replies?: () => Promise<ReplyEmail[]>;
   /** Finds full postings for shortlisted alert-email jobs. Needs a scorer, to score them again. */
   enricher?: Enricher;
   /** Re-checks found posting pages. Tests replace it; defaults to a plain HTTP check. */
@@ -41,6 +45,8 @@ export interface RunStats {
   alreadyApplied: number;
   /** Listings taken off because you already applied to that job, it's on its way to being sent, or you dismissed it. */
   appliedListings: number;
+  /** Replies to your applications recorded this run, and ones that couldn't be tied to one application. */
+  replies: ReplyStats;
   evaluated: number;
   filteredOut: number;
   duplicates: number;
@@ -63,7 +69,7 @@ export interface RunStats {
 function emptyStats(): RunStats {
   return {
     sources: { ok: 0, failed: 0, errors: [] },
-    fetched: 0, inserted: 0, changed: 0, closed: 0, alreadyApplied: 0, appliedListings: 0,
+    fetched: 0, inserted: 0, changed: 0, closed: 0, alreadyApplied: 0, appliedListings: 0, replies: { recorded: {}, unmatched: 0 },
     evaluated: 0, filteredOut: 0, duplicates: 0, queued: 0,
     scored: 0, shortlisted: 0, lowScore: 0, scoreErrors: 0, scoringBacklog: 0,
     enrich: { tried: 0, found: 0, cost: 0 },
@@ -82,6 +88,7 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
 
   await collect(deps, stats, iso);
   await markApplied(deps, stats, iso);
+  await markReplies(deps, stats, iso);
   removeAppliedListings(deps, stats, iso);
   evaluate(deps, stats, clock);
   dropOldAlertJobs(deps, stats, clock);
@@ -190,6 +197,19 @@ async function markApplied(deps: RunDeps, stats: RunStats, iso: () => string) {
     }
   } catch (err) {
     deps.logger.warn(`could not read application confirmation emails: ${(err as Error).message}`);
+  }
+}
+
+/** Step 1b': replies to applications, for callback rates. Runs after confirmations, so new applications can match. */
+async function markReplies(deps: RunDeps, stats: RunStats, iso: () => string) {
+  if (!deps.replies) return;
+  try {
+    const replies = await deps.replies();
+    stats.replies = deps.store.db.transaction(() => recordReplies(deps.store, replies, iso()))();
+    const parts = Object.entries(stats.replies.recorded).map(([kind, n]) => `${n} ${kind}`);
+    if (parts.length) deps.logger.info(`replies: ${parts.join(', ')} (see Results on the review page)`);
+  } catch (err) {
+    deps.logger.warn(`could not read replies to your applications: ${(err as Error).message}`);
   }
 }
 

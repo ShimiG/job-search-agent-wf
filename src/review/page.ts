@@ -89,6 +89,12 @@ export const PAGE = String.raw`<!doctype html>
   .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--card); transition: left .15s; }
   .switch input:checked { background: var(--accent); }
   .switch input:checked::after { left: 16px; }
+  .stats { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .stats th, .stats td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  .stats th:first-child, .stats td:first-child { text-align: left; white-space: normal; min-width: 8.5em; }
+  .stats th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; margin: 6px 0 4px; }
+  .big { font-size: 28px; font-weight: 700; margin-right: 6px; }
   .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
   .panel h2 { font-size: 17px; margin: 0 0 4px; }
   .panel h3 { font-size: 13px; margin: 14px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -137,6 +143,7 @@ export const PAGE = String.raw`<!doctype html>
     { id: 'ready', label: 'Ready to send', empty: 'No applications waiting for your approval.' },
     { id: 'sending', label: 'Sending', empty: 'Nothing waiting for the Submitter.' },
     { id: 'sent', label: 'Sent', empty: 'No applications sent in the last 14 days.' },
+    { id: 'results', label: 'Results', empty: '' },
     { id: 'below', label: 'Below cutoff', empty: 'Nothing below the cutoff.' },
     { id: 'cv', label: 'Your CV', empty: '' }
   ];
@@ -332,6 +339,39 @@ export const PAGE = String.raw`<!doctype html>
     return wrap;
   }
 
+  // Which of the posting's key terms the tailored CV uses word for word, as a keyword-matching ATS sees it.
+  function keywordBox(j) {
+    var kw = j.docs.keywords;
+    var box = keep(el('details'), 'keywords-' + j.id);
+    box.appendChild(el('summary', null, 'ATS keywords: ' + kw.matched + ' of ' + kw.total + ' in the CV word for word' + (kw.requiredTotal ? ' (' + kw.requiredMatched + ' of ' + kw.requiredTotal + ' must-haves)' : '') + ', ' + kw.supported + ' backed by your CV'));
+    var groups = [
+      ['matched', 'In the CV', 'good'],
+      ['left_out', 'Your CV uses these, this version left them out', 'warn'],
+      ['reworded', 'Your CV shows these in other words', 'warn'],
+      ['missing', 'Not in your CV (never added)', 'bad']
+    ];
+    groups.forEach(function (g) {
+      var items = kw.items.filter(function (i) { return i.status === g[0]; });
+      if (!items.length) return;
+      box.appendChild(el('p', 'note', g[1] + ':'));
+      var tags = el('div', 'tags');
+      items.forEach(function (i) {
+        var t = el('span', 'tag ' + g[2], i.term + (i.required ? '' : ' (nice to have)'));
+        if (i.evidence) t.title = 'Your CV: ' + i.evidence;
+        tags.appendChild(t);
+      });
+      box.appendChild(tags);
+    });
+    if (kw.redoNote) {
+      var row = el('div', 'row');
+      row.appendChild(btn('Redo using the terms your CV backs up', 'small', function () {
+        ui.notes[j.id] = kw.redoNote; ui.redoOpen.add(j.id); render();
+      }));
+      box.appendChild(row);
+    }
+    return box;
+  }
+
   // A link to the company's own page for the job. What it does depends on where the job is:
   // on the Shortlist it reads the full posting and tailors from it; once the application is written
   // (Ready to send, stuck in Sending) it's simply where to apply, so it goes to the Submitter.
@@ -386,7 +426,7 @@ export const PAGE = String.raw`<!doctype html>
   // ------------------------------------------------------------ layout
   function renderTabs(d) {
     var nav = $('tabs'); nav.textContent = '';
-    var c = { shortlist: d.shortlist.length, tailoring: d.tailoring.length, ready: d.ready.length, sending: d.sending.length, sent: d.sent.length, below: ui.below ? ui.below.length : null, cv: null };
+    var c = { shortlist: d.shortlist.length, tailoring: d.tailoring.length, ready: d.ready.length, sending: d.sending.length, sent: d.sent.length, below: ui.below ? ui.below.length : null, results: null, cv: null };
     TABS.forEach(function (t) {
       var b = el('button', null, t.label); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(ui.tab === t.id));
       if (c[t.id] !== null) b.appendChild(el('span', 'n' + ((t.id === 'ready' || t.id === 'shortlist') && c[t.id] ? ' hot' : ''), String(c[t.id])));
@@ -514,6 +554,7 @@ export const PAGE = String.raw`<!doctype html>
         }
         if (j.docs && j.docs.feedback) extra.push(el('p', 'note', 'Your note for this version: ' + j.docs.feedback));
         var after = [];
+        if (j.docs && j.docs.keywords) after.push(keywordBox(j));
         if (j.docs && j.docs.report) {
           var rep = keep(el('details'), 'report-' + j.id);
           rep.appendChild(el('summary', null, 'Tailoring report: what was emphasized, gaps, warnings'));
@@ -531,6 +572,14 @@ export const PAGE = String.raw`<!doctype html>
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
+        if (j.docs && j.docs.keywords) {
+          var kw = j.docs.keywords;
+          // Green only when most terms and at least half the must-haves are there word for word.
+          var strong = kw.matched / kw.total >= 0.6 && (!kw.requiredTotal || kw.requiredMatched / kw.requiredTotal >= 0.5);
+          var t = el('span', 'tag ' + (strong ? 'good' : 'warn'), 'Keywords ' + kw.matched + '/' + kw.total);
+          t.title = kw.matched + " of the posting's " + kw.total + ' key terms appear in this CV word for word';
+          tags.push(t);
+        }
         root.appendChild(jobCard(j, { select: ui.approve, tags: tags, extra: extra, after: after, summary: false }));
       });
     } else if (ui.tab === 'sending') {
@@ -595,8 +644,49 @@ export const PAGE = String.raw`<!doctype html>
       });
     }
     if (ui.tab === 'cv') { $('toolbar').textContent = ''; renderCv(root); renderActions(d); return; }
+    if (ui.tab === 'results') { $('toolbar').textContent = ''; renderResults(root, d.results); renderActions(d); return; }
     if (!list.length) root.appendChild(el('p', 'empty', ui.tab === 'below' && !ui.below ? 'Loading…' : tab.empty));
     renderActions(d);
+  }
+
+  // ------------------------------------------------------------ results
+  var KIND = { interview: 'interview', assessment: 'assignment', offer: 'offer', rejection: 'rejection' };
+  function pct(rate) { return rate === null ? '–' : Math.round(rate * 100) + '%'; }
+  function statsTable(title, groups) {
+    var wrap = el('div', 'table-wrap'), t = el('table', 'stats'), head = el('tr');
+    [title, 'Applied', 'Callbacks', 'Rate', 'Rejected', 'No reply', 'Waiting'].forEach(function (h) { var th = el('th', null, h); th.scope = 'col'; head.appendChild(th); });
+    var thead = el('thead'); thead.appendChild(head); t.appendChild(thead);
+    var body = el('tbody');
+    groups.forEach(function (g) {
+      var tr = el('tr');
+      [g.label, g.applied, g.callbacks, pct(g.rate), g.rejected, g.noReply, g.waiting].forEach(function (v) { tr.appendChild(el('td', null, String(v))); });
+      body.appendChild(tr);
+    });
+    t.appendChild(body); wrap.appendChild(t); return wrap;
+  }
+  function renderResults(root, r) {
+    if (!r || !r.total.applied) { root.appendChild(el('p', 'empty', 'No applications yet. Once you apply, replies from your inbox show up here.')); return; }
+    var t = r.total, top = el('div', 'panel');
+    var line = el('p'); line.appendChild(el('span', 'big', pct(t.rate))); line.appendChild(document.createTextNode('callback rate'));
+    top.appendChild(line);
+    top.appendChild(el('p', 'note', t.applied + ' applications: ' + t.callbacks + ' callback' + (t.callbacks === 1 ? '' : 's') + (t.offers ? ' (' + t.offers + ' offer' + (t.offers === 1 ? '' : 's') + ')' : '') + ', ' + t.rejected + ' rejected, ' + t.noReply + ' no reply, ' + t.waiting + ' sent in the last ' + r.waitingDays + ' days.'));
+    top.appendChild(el('p', 'note', 'A callback is an interview invitation, a take-home assignment or an offer. The rate counts applications older than ' + r.waitingDays + " days, so recent ones don't drag it down. Replies are read from your inbox on each Scout run."));
+    root.appendChild(top);
+    [['By source', r.bySource], ['By score', r.byScore], ['By how you applied', r.byMethod]].forEach(function (x) {
+      var p = el('div', 'panel'); p.appendChild(el('h3', null, x[0])); p.appendChild(statsTable(x[0].replace('By ', '').replace(/^./, function (c) { return c.toUpperCase(); }), x[1])); root.appendChild(p);
+    });
+    var latest = el('div', 'panel'); latest.appendChild(el('h3', null, 'Latest replies'));
+    if (!r.recent.length) latest.appendChild(el('p', 'note', 'No replies found yet.'));
+    else {
+      var ul = el('ul');
+      r.recent.forEach(function (x) {
+        var li = el('li'); var cls = x.kind === 'rejection' ? 'tag bad' : 'tag good';
+        li.appendChild(el('span', cls, KIND[x.kind] || x.kind)); li.appendChild(document.createTextNode(' ' + x.receivedAt.slice(0, 10) + ' · #' + x.jobId + ' ' + x.company + ' — ' + x.title));
+        li.title = x.subject; ul.appendChild(li);
+      });
+      latest.appendChild(ul);
+    }
+    root.appendChild(latest);
   }
 
   // ------------------------------------------------------------ your CV

@@ -116,7 +116,42 @@ const MIGRATIONS: string[] = [
   ALTER TABLE jobs ADD COLUMN posting_url TEXT;
   UPDATE jobs SET posting_url = apply_url, apply_url = NULL WHERE enriched_at IS NOT NULL AND description_is_partial = 0;
   `,
+  // 6: Replies to applications (interview, assessment, offer, rejection), for callback rates.
+  `
+  CREATE TABLE responses (
+    id           INTEGER PRIMARY KEY,
+    job_id       INTEGER NOT NULL REFERENCES jobs(id),
+    kind         TEXT NOT NULL,
+    received_at  TEXT NOT NULL,
+    sender       TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    message_key  TEXT NOT NULL UNIQUE,
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX idx_responses_job ON responses(job_id);
+  `,
 ];
+
+export interface ResponseRecord {
+  id: number;
+  jobId: number;
+  kind: 'interview' | 'assessment' | 'offer' | 'rejection';
+  receivedAt: string;
+  sender: string;
+  subject: string;
+  messageKey: string;
+  createdAt: string;
+}
+
+/** A job you applied to, with when and how. */
+export interface AppliedJobRow extends JobRow {
+  /** The first recorded submission, or when the job was last updated if none was recorded. */
+  appliedAt: string;
+  /** The Submitter sent it (any mode other than "manual"). */
+  bySubmitter: boolean;
+  /** A tailored CV and cover letter exist for it. */
+  tailored: boolean;
+}
 
 export interface SubmissionRecord {
   id: number;
@@ -201,6 +236,7 @@ interface DbJobRow {
   first_seen_at: string;
   last_seen_at: string;
   closed_at: string | null;
+  updated_at: string;
   tailor_feedback: string | null;
   enriched_at: string | null;
   posting_url: string | null;
@@ -610,6 +646,55 @@ export class JobStore {
 
   sourceHealth(): Array<{ source_key: string; last_success_at: string | null; last_job_count: number | null; last_error: string | null; last_error_at: string | null }> {
     return this.db.prepare('SELECT * FROM source_health ORDER BY source_key').all() as never;
+  }
+
+  /** Records a reply once per email. Returns false when it was already recorded. */
+  saveResponse(r: Omit<ResponseRecord, 'id'>): boolean {
+    const info = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO responses (job_id, kind, received_at, sender, subject, message_key, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(r.jobId, r.kind, r.receivedAt, r.sender, r.subject, r.messageKey, r.createdAt);
+    return info.changes > 0;
+  }
+
+  responses(jobId?: number): ResponseRecord[] {
+    const rows = (
+      jobId === undefined
+        ? this.db.prepare('SELECT * FROM responses ORDER BY received_at DESC, id DESC').all()
+        : this.db.prepare('SELECT * FROM responses WHERE job_id = ? ORDER BY received_at DESC, id DESC').all(jobId)
+    ) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as number,
+      jobId: r.job_id as number,
+      kind: r.kind as ResponseRecord['kind'],
+      receivedAt: r.received_at as string,
+      sender: r.sender as string,
+      subject: r.subject as string,
+      messageKey: r.message_key as string,
+      createdAt: r.created_at as string,
+    }));
+  }
+
+  /** Every job you applied to (closed postings too), with when and how you applied. */
+  appliedJobs(): AppliedJobRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT j.*,
+           (SELECT MIN(s.created_at) FROM submissions s WHERE s.job_id = j.id AND s.outcome = 'submitted') AS applied_at,
+           EXISTS (SELECT 1 FROM submissions s WHERE s.job_id = j.id AND s.outcome = 'submitted' AND s.mode != 'manual') AS by_submitter,
+           EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id) AS tailored
+         FROM jobs j WHERE j.status = 'submitted'
+         ORDER BY applied_at DESC`,
+      )
+      .all() as Array<DbJobRow & { applied_at: string | null; by_submitter: number; tailored: number }>;
+    return rows.map((r) => ({
+      ...toJobRow(r),
+      appliedAt: r.applied_at ?? r.updated_at,
+      bySubmitter: Boolean(r.by_submitter),
+      tailored: Boolean(r.tailored),
+    }));
   }
 
   latestRun(agent: string): { id: number; startedAt: string; finishedAt: string | null } | undefined {

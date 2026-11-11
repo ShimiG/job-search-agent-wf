@@ -83,6 +83,9 @@ export function formatRunStats(stats: RunStats): string {
     `Sources: ${stats.sources.ok} ok, ${stats.sources.failed} failed`,
     `Postings: ${stats.fetched} fetched, ${stats.inserted} new, ${stats.changed} changed, ${stats.closed} closed`,
     ...(stats.alreadyApplied ? [`Applied: ${stats.alreadyApplied} job(s) marked from your confirmation emails`] : []),
+    ...(Object.keys(stats.replies?.recorded ?? {}).length
+      ? [`Replies: ${Object.entries(stats.replies.recorded).map(([k, n]) => `${n} ${k}`).join(', ')} (npm run scout -- results)`]
+      : []),
     ...(stats.appliedListings ? [`Skipped: ${stats.appliedListings} listing(s) of jobs you already applied to, are applying to, or dismissed`] : []),
     `Evaluated: ${stats.evaluated} → ${stats.filteredOut} filtered out${reasons ? ` (${reasons})` : ''}, ${stats.duplicates} duplicates, ${stats.queued} queued`,
     `Scored: ${stats.scored} → ${stats.shortlisted} shortlisted, ${stats.lowScore} below threshold, ${stats.scoreErrors} errors`,

@@ -70,6 +70,15 @@ describe('runTailor', () => {
     const md = readFileSync(path.join(app.dir, 'report.md'), 'utf8');
     assert.match(md, /Ready to approve/);
     assert.match(md, /~~Developed LLM-powered support agents/);
+
+    // Coverage is measured on the final CV text: the reverted Kubernetes bullet doesn't count.
+    assert.deepEqual(
+      report.keywords!.items.map((k) => [k.term, k.status]),
+      [['REST', 'matched'], ['LLM agents', 'reworded'], ['Kubernetes', 'missing']],
+    );
+    assert.deepEqual([report.keywords!.matched, report.keywords!.supported, report.keywords!.total], [1, 2, 3]);
+    assert.match(md, /## ATS keywords\n1 of 3 of the posting's key terms appear in this CV word for word \(0 of 2 must-haves\)/);
+    assert.match(md, /LLM agents: "Developed LLM-powered support agents/);
   });
 
   it('flags the package when a letter claim survives the revision', async () => {

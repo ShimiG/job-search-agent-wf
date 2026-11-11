@@ -119,9 +119,13 @@ export const SourcesSchema = z.object({
       trackApplications: z.boolean().default(true),
       /** How far back to look for confirmation emails. */
       applicationsSinceDays: z.number().int().min(1).default(365),
+      /** Read replies to your applications (interviews, assignments, offers, rejections) for callback rates. */
+      trackReplies: z.boolean().default(true),
+      /** How far back to look for replies. */
+      repliesSinceDays: z.number().int().min(1).default(90),
       feeds: z.array(EmailFeedSchema).default([]),
     })
-    .default({ enabled: false, mailbox: 'INBOX', sinceDays: 3, trackApplications: true, applicationsSinceDays: 365, feeds: [] }),
+    .default({ enabled: false, mailbox: 'INBOX', sinceDays: 3, trackApplications: true, applicationsSinceDays: 365, trackReplies: true, repliesSinceDays: 90, feeds: [] }),
 });
 export type SourcesConfig = z.infer<typeof SourcesSchema>;
 

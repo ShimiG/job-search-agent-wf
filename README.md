@@ -74,7 +74,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 |---|---|
 | `data/master-cv.json` | Your CV as structured data, blank until you upload one via **Your CV** on the review page. Every highlight has an `id`: the Tailor cites these to prove each claim in a tailored CV comes from you. |
 | `config/preferences.json` | Target roles, title keywords, seniority, locations (`allowOnsite`, remote rules), languages, score cutoffs, web lookups. |
-| `config/sources.json` | Job boards, and alert-email reading (`emailAlerts`). |
+| `config/sources.json` | Job boards, and inbox reading (`emailAlerts`): alert emails, application confirmations and replies. |
 | `config/tailor.json` | Your email and phone for the CV header, languages, length limits, cover-letter style. |
 | `config/submit.json` | Submitter settings and your answer bank for screening questions. |
 | `.env` | API key and optional settings below. |
@@ -165,6 +165,21 @@ protected the same way, so nothing is applied to twice. Removed listings are kep
 job they repeat, with the reason, and cost nothing to score. The run summary shows how many were
 skipped. Picking a dismissed job again (`npm run scout -- pick <id>`) brings it back.
 
+### Results: which applications get callbacks
+
+Scout also reads replies to your applications from the same inbox: interview invitations, take-home
+assignments, offers and rejections, in English and Hebrew. Each is tied to the application it answers
+(by the sender's domain or name, the subject, or for ATS emails the company named in the text; a reply
+that could fit two companies is left out rather than guessed). Confirmations that only promise "if
+you're selected, we'll schedule an interview" don't count.
+
+The **Results** tab (or `npm run scout -- results`) shows your callback rate overall and by source
+(LinkedIn alerts, Drushim, a company's board…), by score band, and by how you applied (the Submitter,
+you with the tailored CV, or you on your own). A callback is an interview, an assignment or an offer, and
+an interview followed by a rejection still counts. Applications from the last 14 days are shown as
+waiting and left out of the rate. Use it to tune your score cutoffs and drop sources that never answer.
+Turn it off with `"trackReplies": false`; `repliesSinceDays` (default 90) sets how far back to read.
+
 ## The review page
 
 ```bash
@@ -175,9 +190,10 @@ npm run review               # http://127.0.0.1:4100
 |---|---|
 | **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. |
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
-| **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
+| **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Sent** | The last 14 days, with every answer Claude wrote on each form. |
+| **Results** | Your callback rate, by source, score band and how you applied, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
 
 **Paste a link** to the company's own page for a job (from LinkedIn's Apply button, a careers site…).
@@ -319,6 +335,13 @@ model to ignore instructions inside them. After changing preferences or your CV,
    rendered again until it fits: fewer skills, one project, fewer bullets for older roles, a two-sentence
    summary, fewer bullets for the current role, smaller type, and only then no project. Nothing is
    reworded; the report says what was trimmed. Versions you edit by hand are never trimmed.
+6. **ATS keywords.** Many employers screen with an ATS that matches the posting's exact words. The draft
+   also lists the posting's key terms (8–20), and each is checked against the final CV text: **in the
+   CV** word for word, **left out** (your CV uses the term, this version doesn't), **in other words**
+   (your CV shows it with different wording), or **not in your CV**. Terms the posting doesn't actually
+   contain are dropped. Ready to send shows the count ("Keywords 9/14") and the lists, and
+   **Redo using the terms your CV backs up** fills in a note for the Tailor. Terms your CV doesn't show
+   are never added: the fact-check still applies.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.

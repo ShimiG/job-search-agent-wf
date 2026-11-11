@@ -16,11 +16,13 @@ import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
 import { checkApplyPage, postingFromLink } from '../llm/posting.ts';
 import { AnthropicScorer } from '../llm/scorer.ts';
 import { sweepAppliedListings } from '../pipeline/applied.ts';
+import { outcomeReport, WAITING_DAYS } from '../pipeline/outcomes.ts';
 import { cutoff } from '../pipeline/run.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
 import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts';
 import type { JobRow } from '../types.ts';
+import { redoNote } from '../tailor/keywords.ts';
 import { PAGE } from './page.ts';
 
 /*
@@ -224,6 +226,7 @@ function documents(store: JobStore, j: JobRow) {
     unverified: report.issues.filter((i) => i.severity === 'unresolved').map((i) => `${i.where}: ${i.message}`),
     report: files.includes('report.md') ? readFileSync(path.join(app.dir, 'report.md'), 'utf8').slice(0, 20_000) : '',
     feedback: app.feedback,
+    keywords: report.keywords?.total ? { ...report.keywords, redoNote: redoNote(report.keywords) } : null,
   };
 }
 
@@ -283,6 +286,7 @@ async function state() {
         .map((j) => ({ job: j, last: lastAttempt(store, j) }))
         .filter((x) => x.last?.outcome === 'submitted' && Date.parse(x.last.at) > recent)
         .map((x) => ({ ...view(x.job), last: x.last })),
+      results: { ...outcomeReport(store), waitingDays: WAITING_DAYS },
     })),
   };
 }

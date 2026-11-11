@@ -9,6 +9,7 @@ import type { Logger } from '../util/logger.ts';
 import type { ClaimVerifier, DraftInput, TailorWriter } from './llm.ts';
 import { documentNames, renderCvHtml, renderLetterHtml, writeText, type PdfEngine } from './render.ts';
 import { SUPPORTED_LANGUAGES, type Issue, type OutputLanguage, type TailorConfig, type TailoredContent, type VerificationReport } from './schema.ts';
+import { formatCoverage, keywordCoverage } from './keywords.ts';
 import { applyVerdicts, bulletChanges, claimsForReview, factCheck, normalizeDraft, type Claim, type ContentBody } from './verify.ts';
 
 export interface TailorDeps {
@@ -99,6 +100,7 @@ export async function produceContent(job: JobRow, deps: TailorDeps): Promise<{ c
     bulletChanges: bulletChanges(body, cv),
     llmChecked: true,
     revised,
+    keywords: keywordCoverage(body, cv, postText),
   };
   return { content, report };
 }
@@ -158,7 +160,7 @@ export async function writeArtifacts(
   report: VerificationReport,
   deps: Pick<TailorDeps, 'cv' | 'cfg' | 'pdf'>,
   today: Date,
-  opts: { fit?: boolean } = {},
+  opts: { fit?: boolean; posting?: string } = {},
 ): Promise<{ files: string[]; content: TailoredContent }> {
   mkdirSync(dir, { recursive: true });
   const names = documentNames(deps.cv.name);
@@ -193,6 +195,8 @@ export async function writeArtifacts(
     report.cvPages = pages;
     if (trimmed.length) {
       report.issues.push({ severity: 'warning', where: 'layout', message: `trimmed to fit ${target} page(s): ${trimmed.join(', ')}` });
+      // A trimmed bullet may have carried one of the posting's terms.
+      if (report.keywords && opts.posting) report.keywords = keywordCoverage(fitted, deps.cv, opts.posting);
     }
     if (pages > target) {
       report.issues.push({
@@ -213,7 +217,7 @@ export async function tailorJob(job: JobRow, deps: TailorDeps): Promise<{ app: A
   const { content, report } = await produceContent(job, deps);
   const version = (deps.store.latestApplication(job.id)?.version ?? 0) + 1;
   const dir = applicationDir(deps.outDir, job, version);
-  const written = await writeArtifacts(dir, content, report, deps, now, { fit: true });
+  const written = await writeArtifacts(dir, content, report, deps, now, { fit: true, posting: postingText(job) });
   const files = written.files;
 
   const app = deps.store.saveApplication({
@@ -292,6 +296,7 @@ export async function rerender(jobId: number, deps: Pick<TailorDeps, 'store' | '
     bulletChanges: bulletChanges(content, deps.cv),
     llmChecked: false,
     revised: false,
+    keywords: keywordCoverage(content, deps.cv, postingText(job)),
   };
   // Your hand edits are kept as written: no trimming to fit.
   const { files } = await writeArtifacts(app.dir, content, report, deps, today);
@@ -317,6 +322,7 @@ export function formatReport(content: TailoredContent, report: VerificationRepor
     '## Needs your review',
     issueList(bySeverity('unresolved')),
     '',
+    ...formatCoverage(report.keywords),
     '## Posting requirements your CV does not show',
     list(content.notes.requirementsNotMet),
     '',

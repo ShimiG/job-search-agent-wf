@@ -27,7 +27,7 @@ const UNKNOWN_COMPANY = normalizeCompany('Unknown company');
 type Listing = Pick<JobRow, 'source' | 'externalId' | 'normCompany' | 'normTitle' | 'location' | 'url' | 'postingUrl'>;
 
 /** Where a listing came from: the board, or for alert emails the feed ("linkedin", "drushim", "applied"...). */
-const origin = (job: Pick<Listing, 'source' | 'externalId'>) => (job.source === 'email' ? job.externalId.split(':')[0]! : job.source);
+export const origin = (job: Pick<Listing, 'source' | 'externalId'>) => (job.source === 'email' ? job.externalId.split(':')[0]! : job.source);
 
 /** A job page's address without tracking parameters, or null for a home page or anything unparseable. */
 export function normalizeJobUrl(raw: string | null | undefined): string | null {

@@ -18,9 +18,10 @@ import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { AnthropicScorer } from './llm/scorer.ts';
-import { appliedEmailsSource } from './sources/applications.ts';
+import { applicationMailSource } from './sources/applications.ts';
 import { formatJobDetail, formatJobList, formatMarkdown, formatRunStats } from './output/report.ts';
 import { sweepAppliedListings } from './pipeline/applied.ts';
+import { formatOutcomeReport, outcomeReport } from './pipeline/outcomes.ts';
 import { runScout } from './pipeline/run.ts';
 import { createBoardAdapter } from './sources/ats.ts';
 import type { SourceAdapter } from './sources/common.ts';
@@ -46,6 +47,7 @@ Commands:
   pick <id...>                 Send jobs to the Tailor agent (status → selected)
   dismiss <id...>              Drop jobs you don't want (status → dismissed)
   sources                      Configured sources and their last fetch result
+  results                      Callback rates: replies to your applications, by source, score and how you applied
   add-source <careers-url> [--company "Name"] [--token T]
                                Detect the ATS from a careers URL and add it to sources.json
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
@@ -108,9 +110,9 @@ async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
   }
   const store = new JobStore(paths.db);
   try {
-    const applied = appliedEmailsSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
+    const { applied, replies } = applicationMailSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
     const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher });
+    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher });
     console.log('\n' + formatRunStats(stats));
     const shortlist = store.listByStatus(['shortlisted']);
     if (shortlist.length) console.log(`\n${shortlist.length} jobs on your shortlist. See them with: npm run scout -- list`);
@@ -326,6 +328,15 @@ async function main() {
       return commandTransition(paths, parseIds(args), 'dismissed');
     case 'sources':
       return commandSources(paths);
+    case 'results': {
+      const store = new JobStore(paths.db);
+      try {
+        console.log(formatOutcomeReport(outcomeReport(store)));
+      } finally {
+        store.close();
+      }
+      return;
+    }
     case 'add-source':
       return commandAddSource(paths, args[0], values);
     case 'reevaluate': {

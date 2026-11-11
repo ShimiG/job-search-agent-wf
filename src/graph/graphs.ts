@@ -21,7 +21,7 @@ import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
 import { AnthropicEnricher } from '../llm/enrich.ts';
 import { AnthropicScorer } from '../llm/scorer.ts';
 import { runScout, type RunStats } from '../pipeline/run.ts';
-import { appliedEmailsSource } from '../sources/applications.ts';
+import { applicationMailSource } from '../sources/applications.ts';
 import { createBoardAdapter } from '../sources/ats.ts';
 import type { SourceAdapter } from '../sources/common.ts';
 import { DEFAULT_FEEDS, createEmailAlertAdapter } from '../sources/email-alerts.ts';
@@ -87,9 +87,9 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
     }
     scorer = new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL });
   }
-  const applied = appliedEmailsSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
+  const { applied, replies } = applicationMailSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
   const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-  return withStore((store) => runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher }));
+  return withStore((store) => runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher }));
 }
 
 export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): Promise<TailorRunStats> {

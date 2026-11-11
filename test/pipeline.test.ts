@@ -142,6 +142,19 @@ describe('runScout', () => {
     assert.deepEqual(store.listByStatus(['shortlisted']), []);
   });
 
+  it('records replies to applications each run, after the confirmations that create them', async () => {
+    const stats = await runScout(
+      deps([], {
+        applied: async () => [{ company: 'Grain', title: 'AI Builder', via: 'company', appliedAt: '2026-10-01T09:00:00.000Z', rejected: false, subject: 'Thanks for applying' }],
+        replies: async () => [
+          { kind: 'interview', fromName: 'Grain Recruiting', fromAddress: 'no-reply@greenhouse.io', subject: 'Next steps', receivedAt: '2026-10-08T09:00:00.000Z', messageKey: 'm1', excerpt: '' },
+        ],
+      }),
+    );
+    assert.deepEqual(stats.replies, { recorded: { interview: 1 }, unmatched: 0 });
+    assert.equal(store.responses()[0]!.kind, 'interview');
+  });
+
   it('replaces an alert-email job when the full posting shows up later', async () => {
     await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
     const [fromEmail] = store.listByStatus(['shortlisted']);
