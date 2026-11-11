@@ -11,6 +11,7 @@ import type { ClaimVerifier, DraftInput, RecentLetter, TailorWriter } from './ll
 import { documentNames, renderCvHtml, renderLetterHtml, writeText, type PdfEngine } from './render.ts';
 import { SUPPORTED_LANGUAGES, type Issue, type OutputLanguage, type TailorConfig, type TailoredContent, type VerificationReport } from './schema.ts';
 import { formatCoverage, keywordCoverage } from './keywords.ts';
+import { formatStyleNotes, styleNotes } from './style.ts';
 import { letterSimilarity, similarityMessages, type EarlierLetter } from './similarity.ts';
 import { applyVerdicts, bulletChanges, claimsForReview, factCheck, normalizeDraft, type Claim, type ContentBody } from './verify.ts';
 
@@ -106,6 +107,7 @@ export async function produceContent(job: JobRow, deps: TailorDeps): Promise<{ c
     llmChecked: true,
     revised,
     keywords: keywordCoverage(body, cv, postText),
+    style: styleNotes(body, cv),
   };
   return { content, report };
 }
@@ -251,6 +253,7 @@ export async function writeArtifacts(
       report.issues.push({ severity: 'warning', where: 'layout', message: `trimmed to fit ${target} page(s): ${trimmed.join(', ')}` });
       // A trimmed bullet may have carried one of the posting's terms.
       if (report.keywords && opts.posting) report.keywords = keywordCoverage(fitted, deps.cv, opts.posting);
+      if (report.style) report.style = styleNotes(fitted, deps.cv);
     }
     if (pages > target) {
       report.issues.push({
@@ -360,6 +363,7 @@ export async function rerender(jobId: number, deps: Pick<TailorDeps, 'store' | '
     llmChecked: false,
     revised: false,
     keywords: keywordCoverage(content, deps.cv, postingText(job)),
+    style: styleNotes(content, deps.cv),
   };
   checkLetterReuse(deps.store, jobId, content, report, deps.cv, today);
   // Your hand edits are kept as written: no trimming to fit.
@@ -387,6 +391,7 @@ export function formatReport(content: TailoredContent, report: VerificationRepor
     issueList(bySeverity('unresolved')),
     '',
     ...formatCoverage(report.keywords),
+    ...formatStyleNotes(report.style),
     '## Posting requirements your CV does not show',
     list(content.notes.requirementsNotMet),
     '',

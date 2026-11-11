@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MasterCv } from '../config.ts';
-import type { OutputLanguage, TailorConfig, TailoredContent } from './schema.ts';
+import type { CvSection, OutputLanguage, TailorConfig, TailoredContent } from './schema.ts';
 
 /*
  * Templates are deliberately plain: one column, real text, standard headings, no tables or
@@ -53,6 +53,8 @@ ul { margin: 3px 0 0; padding-inline-start: 16px; }
 li { margin: 1px 0; }
 p { margin: 0 0 8px; }
 .muted { color: #48484a; }
+.skills { margin: 1px 0; }
+.skills-cat { font-weight: 600; }
 `;
 
 function contactLine(cv: MasterCv, cfg: TailorConfig): string {
@@ -62,14 +64,32 @@ function contactLine(cv: MasterCv, cfg: TailorConfig): string {
   return parts.map((p) => `<span>${escapeHtml(p)}</span>`).join('');
 }
 
-/** Smaller type and margins: the last resort for fitting a CV on its target page count. */
+/**
+ * Smaller type and margins: the last resort for fitting a CV on its target page count. Not below
+ * 10pt type or half-inch margins: smaller than that reads as cramped and risks clipping in print.
+ */
 const COMPACT_CSS = `
-@page { size: A4; margin: 11mm 14mm; }
-body { font-size: 9.7pt; line-height: 1.33; }
+@page { size: A4; margin: 12.7mm 14mm; }
+body { font-size: 10pt; line-height: 1.33; }
 h2 { margin: 10px 0 4px; }
 .entry { margin-bottom: 5px; }
 p { margin: 0 0 5px; }
 `;
+
+/**
+ * The chosen skills under the categories your CV files them in, most relevant category first, each a
+ * comma-separated line: what recruiters expect, and what a parser reads cleanly. One line of all of
+ * them when grouping is off or your CV has a single category.
+ */
+export function skillsHtml(skills: string[], cv: MasterCv, group: boolean): string {
+  const e = escapeHtml;
+  if (!skills.length) return '';
+  const categoryOf = (skill: string) => cv.skills.find((c) => c.items.includes(skill))?.category.trim() ?? '';
+  const groups = new Map<string, string[]>();
+  for (const s of skills) groups.set(categoryOf(s), [...(groups.get(categoryOf(s)) ?? []), s]);
+  if (!group || groups.size < 2 || groups.has('')) return `<p>${skills.map(e).join(' · ')}</p>`;
+  return [...groups].map(([category, items]) => `<div class="skills"><span class="skills-cat">${e(category)}:</span> ${items.map(e).join(', ')}</div>`).join('\n');
+}
 
 export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: TailorConfig, opts: { compact?: boolean } = {}): string {
   const lang = content.cvLanguage;
@@ -114,6 +134,17 @@ export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: Tailor
     .map((c) => `<div class="entry"><div class="entry-head"><div class="entry-title">${e(c.name)}</div><div class="entry-meta">${e(c.year ?? '')}</div></div>${c.issuer ? `<div class="muted">${e(c.issuer)}</div>` : ''}</div>`)
     .join('\n');
 
+  // Each section's content; an empty one (no projects picked, no certificates) is left out with its heading.
+  const body: Record<CvSection, string> = {
+    summary: content.summary.trim() ? `<p>${e(content.summary)}</p>` : '',
+    experience,
+    projects,
+    skills: skillsHtml(content.skills, cv, cfg.cv.groupSkills),
+    education,
+    certifications,
+    languages: languages ? `<p>${languages}</p>` : '',
+  };
+
   return `<!doctype html>
 <html lang="${lang}" dir="${dir(lang)}">
 <head><meta charset="utf-8"><title>${e(cv.name)} – ${L.cv}</title><style>${BASE_CSS}${opts.compact ? COMPACT_CSS : ''}</style></head>
@@ -123,16 +154,7 @@ export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: Tailor
   <div class="headline">${e(content.headline)}</div>
   <div class="contact">${contactLine(cv, cfg)}</div>
 </header>
-<h2>${L.summary}</h2>
-<p>${e(content.summary)}</p>
-<h2>${L.experience}</h2>
-${experience}
-${projects ? `<h2>${L.projects}</h2>\n${projects}` : ''}
-<h2>${L.skills}</h2>
-<p>${content.skills.map(e).join(' · ')}</p>
-${education ? `<h2>${L.education}</h2>\n${education}` : ''}
-${certifications ? `<h2>${L.certifications}</h2>\n${certifications}` : ''}
-${languages ? `<h2>${L.languages}</h2>\n<p>${languages}</p>` : ''}
+${cfg.cv.sections.map((s) => (body[s] ? `<h2>${L[s]}</h2>\n${body[s]}` : '')).filter(Boolean).join('\n')}
 </body>
 </html>
 `;

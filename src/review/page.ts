@@ -457,6 +457,28 @@ export const PAGE = String.raw`<!doctype html>
     return box;
   }
 
+  // CV bullets that break a writing rule: a weak opener, a pronoun, a spelled-out number, over two lines.
+  function styleBox(j) {
+    var s = j.docs.style, n = s.notes.length;
+    var box = keep(el('details'), 'style-' + j.id);
+    box.appendChild(el('summary', null, 'CV wording: ' + n + (n === 1 ? ' bullet' : ' bullets') + ' to tighten'));
+    var ul = el('ul');
+    s.notes.forEach(function (note) {
+      var li = el('li', null, '“' + note.text + '”');
+      var why = el('ul');
+      note.problems.forEach(function (p) { why.appendChild(el('li', 'hint', p)); });
+      if (note.fromCv) why.appendChild(el('li', 'hint', 'This is your CV’s own wording: fix it once in your CV (Settings → Your CV shows the full check).'));
+      li.appendChild(why); ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    if (s.redoNote) {
+      var row = el('div', 'row');
+      row.appendChild(btn('Redo with tighter wording', 'small', function () { ui.notes[j.id] = s.redoNote; ui.redoOpen.add(j.id); render(); }));
+      box.appendChild(row);
+    }
+    return box;
+  }
+
   // Which of the posting's key terms the tailored CV uses word for word, as a keyword-matching ATS sees it.
   function keywordBox(j) {
     var kw = j.docs.keywords;
@@ -675,6 +697,7 @@ export const PAGE = String.raw`<!doctype html>
         if (j.docs && j.docs.letterReuse) extra.push(letterReuseBox(j));
         var after = [];
         if (j.docs && j.docs.keywords) after.push(keywordBox(j));
+        if (j.docs && j.docs.style) after.push(styleBox(j));
         if (j.docs && j.docs.report) {
           var rep = keep(el('details'), 'report-' + j.id);
           rep.appendChild(el('summary', null, 'Tailoring report: what was emphasized, gaps, warnings'));
@@ -692,6 +715,12 @@ export const PAGE = String.raw`<!doctype html>
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
+        if (j.docs && j.docs.style) {
+          var sn = j.docs.style.notes.length;
+          var st = el('span', 'tag warn', 'Wording ' + sn);
+          st.title = sn + (sn === 1 ? ' bullet breaks' : ' bullets break') + ' a CV writing rule';
+          tags.push(st);
+        }
         if (j.docs && j.docs.letterReuse) {
           var lr = j.docs.letterReuse;
           tags.push(el('span', 'tag ' + (lr.sameCompany ? 'bad' : 'warn'), lr.sameCompany ? 'Letter repeats one to ' + j.company : 'Letter repeats earlier ones'));

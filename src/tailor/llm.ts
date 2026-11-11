@@ -45,9 +45,16 @@ Truthfulness is the hard constraint. Everything you write about the candidate mu
   describes the same work. Never add numbers, tools, technologies, team sizes, outcomes, or
   ownership the highlight doesn't state ("built" must not become "led", "contributed" must not
   become "owned").
+- Bullet style: open with an active past-tense verb (Built, Reduced, Automated); present tense only
+  for work still going on. No "I", "we", "my" or "our". Never "Responsible for", "Tasked with",
+  "Assisted in" or "Worked on": say what was done. Where the highlight states a result or a number,
+  lead with it; where it doesn't, don't suggest one. Numbers as digits (3, not "three"). No adverbs
+  that praise the work ("strategically", "successfully", "seamlessly"). At most two lines: about 190
+  characters. A long highlight is cut to the part that matters for this job, not squeezed.
 - Experience: include EVERY experience entry from the CV, by id, with its most relevant highlights
   first. Projects: include only the most relevant ones.
-- Skills: copy skill strings exactly as written in the CV, most relevant first.
+- Skills: copy skill strings exactly as written in the CV, most relevant first. Prefer skills that
+  the bullets you chose actually show over ones that appear nowhere else on this CV.
 - Certifications: if the CV lists certifications, give the ids of those relevant to this job, most
   relevant first, and none that aren't. A relevant one may also back a point in the cover letter.
   Never mention a certification the CV doesn't list.

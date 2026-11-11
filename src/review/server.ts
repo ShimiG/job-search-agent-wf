@@ -31,6 +31,7 @@ import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts
 import type { JobRow } from '../types.ts';
 import { redoNote } from '../tailor/keywords.ts';
 import { similarityRedoNote } from '../tailor/similarity.ts';
+import { styleRedoNote } from '../tailor/style.ts';
 import { PAGE } from './page.ts';
 
 /*
@@ -251,6 +252,7 @@ function documents(store: JobStore, j: JobRow) {
     report: files.includes('report.md') ? readFileSync(path.join(app.dir, 'report.md'), 'utf8').slice(0, 20_000) : '',
     feedback: app.feedback,
     keywords: report.keywords?.total ? { ...report.keywords, redoNote: redoNote(report.keywords) } : null,
+    style: report.style?.length ? { notes: report.style, redoNote: styleRedoNote(report.style) } : null,
     letterReuse: report.letterSimilarity?.flagged
       ? {
           sameCompany: report.letterSimilarity.sameCompany,
