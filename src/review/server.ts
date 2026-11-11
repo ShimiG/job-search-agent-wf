@@ -7,6 +7,7 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { loadJsonFile, MasterCvSchema, PreferencesSchema, resolvePaths } from '../config.ts';
+import { auditCv } from '../cv/audit.ts';
 import { addCertificate, CERTIFICATE_MAX_BYTES, CERTIFICATE_TYPES, certificateFile, listCertificates, removeCertificate, withCertificates } from '../cv/certificates.ts';
 import { importCv } from '../cv/import.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
@@ -31,6 +32,8 @@ import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts
 import type { JobRow } from '../types.ts';
 import { redoNote } from '../tailor/keywords.ts';
 import { similarityRedoNote } from '../tailor/similarity.ts';
+import { pdfTextMessage, pdfTextOk } from '../tailor/pdf-text.ts';
+import { styleRedoNote } from '../tailor/style.ts';
 import { PAGE } from './page.ts';
 
 /*
@@ -251,6 +254,8 @@ function documents(store: JobStore, j: JobRow) {
     report: files.includes('report.md') ? readFileSync(path.join(app.dir, 'report.md'), 'utf8').slice(0, 20_000) : '',
     feedback: app.feedback,
     keywords: report.keywords?.total ? { ...report.keywords, redoNote: redoNote(report.keywords) } : null,
+    style: report.style?.length ? { notes: report.style, redoNote: styleRedoNote(report.style) } : null,
+    pdfText: report.pdfText ? { ok: pdfTextOk(report.pdfText), checked: report.pdfText.checked, message: pdfTextMessage(report.pdfText) } : null,
     letterReuse: report.letterSimilarity?.flagged
       ? {
           sameCompany: report.letterSimilarity.sameCompany,
@@ -362,7 +367,7 @@ function cvSummary() {
   if (!existsSync(paths.masterCv)) return { exists: false, path: paths.masterCv, contact, certificates };
   const raw = readFileSync(paths.masterCv, 'utf8');
   const cv = MasterCvSchema.parse(JSON.parse(raw));
-  return { exists: true, path: paths.masterCv, contact, todos: (raw.match(/TODO/g) ?? []).length, cv, certificates };
+  return { exists: true, path: paths.masterCv, contact, todos: (raw.match(/TODO/g) ?? []).length, cv, certificates, audit: auditCv(cv) };
 }
 
 const DOC_MAX_BYTES = 10 * 1024 * 1024;

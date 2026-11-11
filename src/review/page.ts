@@ -62,6 +62,7 @@ export const PAGE = String.raw`<!doctype html>
   .tag.doc { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .summary { margin: 8px 0 0; }
   .note { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+  .audit { margin: 6px 0 0; padding-left: 20px; font-size: 14px; } .audit li { margin: 6px 0; } .audit-why { color: var(--warn); }
   .flags { margin: 8px 0 0; padding: 8px 10px 8px 26px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; font-size: 14px; }
   details { margin-top: 8px; }
   summary { cursor: pointer; color: var(--accent); font-size: 14px; }
@@ -457,6 +458,28 @@ export const PAGE = String.raw`<!doctype html>
     return box;
   }
 
+  // CV bullets that break a writing rule: a weak opener, a pronoun, a spelled-out number, over two lines.
+  function styleBox(j) {
+    var s = j.docs.style, n = s.notes.length;
+    var box = keep(el('details'), 'style-' + j.id);
+    box.appendChild(el('summary', null, 'CV wording: ' + n + (n === 1 ? ' bullet' : ' bullets') + ' to tighten'));
+    var ul = el('ul');
+    s.notes.forEach(function (note) {
+      var li = el('li', null, '“' + note.text + '”');
+      var why = el('ul');
+      note.problems.forEach(function (p) { why.appendChild(el('li', 'hint', p)); });
+      if (note.fromCv) why.appendChild(el('li', 'hint', 'This is your CV’s own wording: fix it once in your CV (Settings → Your CV shows the full check).'));
+      li.appendChild(why); ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    if (s.redoNote) {
+      var row = el('div', 'row');
+      row.appendChild(btn('Redo with tighter wording', 'small', function () { ui.notes[j.id] = s.redoNote; ui.redoOpen.add(j.id); render(); }));
+      box.appendChild(row);
+    }
+    return box;
+  }
+
   // Which of the posting's key terms the tailored CV uses word for word, as a keyword-matching ATS sees it.
   function keywordBox(j) {
     var kw = j.docs.keywords;
@@ -674,7 +697,12 @@ export const PAGE = String.raw`<!doctype html>
         if (j.docs && j.docs.feedback) extra.push(el('p', 'note', 'Your note for this version: ' + j.docs.feedback));
         if (j.docs && j.docs.letterReuse) extra.push(letterReuseBox(j));
         var after = [];
+        if (j.docs && j.docs.pdfText && !j.docs.pdfText.ok) {
+          var pt = el('ul', 'flags'); pt.appendChild(el('li', null, 'PDF text: ' + j.docs.pdfText.message + ' An applicant tracking system reads this text, not the page. It comes from how the PDF was made (the font, or the browser that printed it), not from the wording, so a redo will not change it.'));
+          after.push(pt);
+        }
         if (j.docs && j.docs.keywords) after.push(keywordBox(j));
+        if (j.docs && j.docs.style) after.push(styleBox(j));
         if (j.docs && j.docs.report) {
           var rep = keep(el('details'), 'report-' + j.id);
           rep.appendChild(el('summary', null, 'Tailoring report: what was emphasized, gaps, warnings'));
@@ -692,6 +720,18 @@ export const PAGE = String.raw`<!doctype html>
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
+        if (j.docs && j.docs.style) {
+          var sn = j.docs.style.notes.length;
+          var st = el('span', 'tag warn', 'Wording ' + sn);
+          st.title = sn + (sn === 1 ? ' bullet breaks' : ' bullets break') + ' a CV writing rule';
+          tags.push(st);
+        }
+        if (j.docs && j.docs.pdfText) {
+          var ptOk = j.docs.pdfText.ok;
+          var ptTag = el('span', 'tag ' + (ptOk ? 'good' : 'bad'), ptOk ? 'PDF reads as text' : 'PDF text problem');
+          ptTag.title = j.docs.pdfText.message;
+          tags.push(ptTag);
+        }
         if (j.docs && j.docs.letterReuse) {
           var lr = j.docs.letterReuse;
           tags.push(el('span', 'tag ' + (lr.sameCompany ? 'bad' : 'warn'), lr.sameCompany ? 'Letter repeats one to ' + j.company : 'Letter repeats earlier ones'));
@@ -1049,6 +1089,51 @@ export const PAGE = String.raw`<!doctype html>
     return box;
   }
 
+  // How the CV itself reads, by the rules the Tailor's bullets are held to. Reports only.
+  function cvAudit(a) {
+    var p = el('div', 'panel');
+    p.appendChild(el('h2', null, 'CV check'));
+    var todo = a.wording.length + a.skills.length + a.general.length;
+    p.appendChild(el('p', 'note', a.withNumber + ' of ' + a.highlights + ' highlights state a number. ' +
+      (todo ? todo + ' thing(s) worth fixing below. ' : 'The wording and the skills list follow the rules. ') +
+      "The Tailor only rewords what is in your CV and never adds a figure, so a fix here reaches every CV it writes. Edit " + (ui.cv ? ui.cv.path : 'your CV file') + ", then reload."));
+    if (a.general.length) { var g = el('ul', 'flags'); a.general.forEach(function (x) { g.appendChild(el('li', null, x)); }); p.appendChild(g); }
+    function findings(key, title, list) {
+      if (!list.length) return;
+      var d = keep(el('details'), key);
+      d.appendChild(el('summary', null, title + ' (' + list.length + ')'));
+      var ul = el('ul', 'audit');
+      list.forEach(function (f) {
+        var li = el('li');
+        li.appendChild(el('div', null, f.text));
+        li.appendChild(el('div', 'hint', f.entry + ' · ' + f.id));
+        f.problems.forEach(function (x) { li.appendChild(el('div', 'audit-why', '→ ' + x)); });
+        ul.appendChild(li);
+      });
+      d.appendChild(ul); p.appendChild(d);
+    }
+    findings('audit-wording', 'Wording', a.wording);
+    if (a.skills.length) {
+      var d = keep(el('details'), 'audit-skills');
+      d.appendChild(el('summary', null, 'Skills (' + a.skills.length + ')'));
+      var ul = el('ul', 'audit');
+      var unshown = [];
+      a.skills.forEach(function (s) {
+        if (s.kind === 'unshown') { unshown.push(s.skill); return; }
+        var li = el('li'); li.appendChild(el('strong', null, s.skill)); li.appendChild(el('span', 'hint', '  ' + s.category));
+        li.appendChild(el('div', 'audit-why', '→ ' + s.problem)); ul.appendChild(li);
+      });
+      if (unshown.length) {
+        var li = el('li'); li.appendChild(el('strong', null, unshown.join(', ')));
+        li.appendChild(el('div', 'audit-why', '→ no highlight or project mentions ' + (unshown.length === 1 ? 'it' : 'these') + ': add one that does, or a reader has only the word to go on'));
+        ul.appendChild(li);
+      }
+      d.appendChild(ul); p.appendChild(d);
+    }
+    findings('audit-numbers', 'Highlights with no number: add a real figure if you have one', a.noNumber);
+    return p;
+  }
+
   function renderCv(root) {
     var up = el('div', 'panel');
     up.appendChild(el('h2', null, 'Upload your CV'));
@@ -1115,6 +1200,7 @@ export const PAGE = String.raw`<!doctype html>
       cur.appendChild(el('p', 'note', 'Your current CV (' + ui.cv.path + ')' + (ui.cv.todos ? ': ' + ui.cv.todos + ' TODO(s) still to fill in' : '')));
       cur.appendChild(cvBody(ui.cv.cv, ui.cv.contact));
     }
+    if (ui.cv && ui.cv.exists && ui.cv.audit && ui.cv.audit.highlights) root.appendChild(cvAudit(ui.cv.audit));
     root.appendChild(cur);
   }
 

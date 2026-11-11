@@ -11,7 +11,7 @@ import { silentLogger } from '../src/util/logger.ts';
 import { makeJob } from './helpers.ts';
 import { FakeVerifier, FakeWriter, exampleCv, exampleTailorConfig, sampleDraft } from './tailor-helpers.ts';
 
-const BROWSER = ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', process.env.TAILOR_TEST_BROWSER ?? ''].find((p) => p && existsSync(p));
+const BROWSER = ['/opt/pw-browsers/chromium', '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', process.env.TAILOR_TEST_BROWSER ?? ''].find((p) => p && existsSync(p));
 const fixLetter = (p: string) => (p.includes('Kubernetes') ? 'My production work is integrations: I build and support SOAP and REST flows.' : p);
 
 describe('runTailor', () => {
@@ -253,5 +253,38 @@ describe('runTailor', () => {
     const report = app.verification as VerificationReport;
     assert.equal(report.cvPages, 1);
     assert.ok(readFileSync(path.join(app.dir, 'Dana-TODO-last-name-CV.pdf')).subarray(0, 5).toString() === '%PDF-');
+    // The CV's text reads back out of the PDF whole and in order, brackets and dashes included.
+    assert.ok(report.pdfText && report.pdfText.checked > 10, 'the text check ran');
+    assert.deepEqual({ missing: report.pdfText.missing, outOfOrder: report.pdfText.outOfOrder }, { missing: [], outOfOrder: [] });
+    assert.ok(!report.issues.some((i) => i.where === 'pdf-text'));
+    assert.match(readFileSync(path.join(app.dir, 'report.md'), 'utf8'), /## PDF text\nAll \d+ lines of the CV read back out of the PDF as text, in order\./);
+  });
+
+  it('warns when text on the page does not read back out of the PDF, and when the check cannot run', async () => {
+    const engine = (readText: (file: string) => Promise<string>) => ({
+      async render(_html: string, out: string) {
+        writeFileSync(out, '%PDF-1.4');
+        return { pages: 1 };
+      },
+      readText,
+      async close() {},
+    });
+    // A parser that gets the name and nothing else.
+    await runTailor(deps({ pdf: engine(async () => 'Dana TODO-last-name') }));
+    let report = store.latestApplication(jobId)!.verification as VerificationReport;
+    assert.ok(report.pdfText!.missing.length > 5);
+    const issue = report.issues.find((i) => i.where === 'pdf-text')!;
+    assert.equal(issue.severity, 'warning');
+    assert.match(issue.message, /can't be read back out of the PDF as they appear on the page, so an applicant tracking system may not see them/);
+    assert.equal(report.ok, true, 'a warning, not something to verify against your CV');
+
+    // Rendered again without a PDF: there is nothing to check, and the old finding goes.
+    ({ report } = await rerender(jobId, { store, cv: exampleCv(), cfg: exampleTailorConfig(), pdf: null }));
+    assert.equal(report.pdfText, undefined);
+    assert.ok(!report.issues.some((i) => i.where === 'pdf-text'));
+
+    ({ report } = await rerender(jobId, { store, cv: exampleCv(), cfg: exampleTailorConfig(), pdf: engine(async () => { throw new Error('bad XRef entry'); }) }));
+    assert.equal(report.pdfText, undefined);
+    assert.match(report.issues.find((i) => i.where === 'pdf-text')!.message, /could not read the PDF's text back to check it: bad XRef entry/);
   });
 });

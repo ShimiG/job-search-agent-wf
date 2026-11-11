@@ -20,6 +20,7 @@ import { CostMeter } from './llm/cost.ts';
 import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
+import { auditCv, formatAudit } from './cv/audit.ts';
 import { mergeProjects, parseProjectsFile } from './cv/projects.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { compareWithClaude, formatComparison } from './llm/compare.ts';
@@ -64,6 +65,7 @@ Commands:
   cv-projects <file.json> [--replace-all]
                                Update the projects in your CV from a file: same ID or name replaces, the rest
                                are added; --replace-all also removes projects the file doesn't list
+  cv-check                     Check your CV's own wording: weak bullets, bullets with no number, skills nothing backs up
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
   watch [--cron "0 8 * * *"]   Keep running and do a full run on a schedule
   archive                      Archiver: sort new replies to your applications and update data/applications-report.md
@@ -433,6 +435,10 @@ async function main() {
       return commandAddSource(paths, args[0], values);
     case 'cv-projects':
       return commandCvProjects(paths, args[0], Boolean(values['replace-all']));
+    case 'cv-check':
+      if (!existsSync(paths.masterCv)) throw new ConfigError(`No CV yet at ${paths.masterCv}. Upload one on the review page first (Settings → Your CV).`);
+      console.log(formatAudit(auditCv(loadJsonFile(paths.masterCv, MasterCvSchema))));
+      return;
     case 'reevaluate': {
       const store = new JobStore(paths.db);
       try {

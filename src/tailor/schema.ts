@@ -1,9 +1,15 @@
 import { z } from 'zod';
 import type { KeywordCoverage } from './keywords.ts';
 import type { LetterSimilarity } from './similarity.ts';
+import type { PdfTextCheck } from './pdf-text.ts';
+import type { StyleNote } from './style.ts';
 
 export const SUPPORTED_LANGUAGES = ['en', 'he', 'ru'] as const;
 export type OutputLanguage = (typeof SUPPORTED_LANGUAGES)[number];
+
+/** Every section a CV can have, in the default order. */
+export const CV_SECTIONS = ['summary', 'experience', 'projects', 'skills', 'education', 'certifications', 'languages'] as const;
+export type CvSection = (typeof CV_SECTIONS)[number];
 
 export const TailorConfigSchema = z.object({
   /** Shown in the CV header. The master CV holds name, location and links. */
@@ -30,8 +36,22 @@ export const TailorConfigSchema = z.object({
       maxCertifications: z.number().int().min(0).max(10).default(4),
       /** Warn when the rendered CV PDF is longer than this. */
       targetPages: z.number().int().min(1).max(4).default(1),
+      /**
+       * The CV's sections, top to bottom. Leave one out to drop it (a summary is usually left out
+       * below ten years of experience). The common orders: mid-level and senior
+       * ["experience","skills","projects","education","certifications","languages"]; early career
+       * ["education","skills","projects","experience","languages"]; staff and above, or a career
+       * change, keep "summary" first.
+       */
+      sections: z
+        .array(z.enum(CV_SECTIONS))
+        .refine((s) => s.includes('experience'), 'the CV needs its "experience" section')
+        .refine((s) => new Set(s).size === s.length, 'each section once')
+        .default([...CV_SECTIONS]),
+      /** Skills under their categories from your CV ("Languages: …", "Cloud: …") instead of one line. */
+      groupSkills: z.boolean().default(true),
     })
-    .default({ maxBulletsPerRole: 5, maxProjects: 2, maxSkills: 14, maxCertifications: 4, targetPages: 1 }),
+    .default({ maxBulletsPerRole: 5, maxProjects: 2, maxSkills: 14, maxCertifications: 4, targetPages: 1, sections: [...CV_SECTIONS], groupSkills: true }),
   coverLetter: z
     .object({
       maxWords: z.number().int().min(80).max(600).default(280),
@@ -161,4 +181,8 @@ export interface VerificationReport {
   keywords?: KeywordCoverage;
   /** How much of the cover letter's wording repeats your recent letters to other jobs. */
   letterSimilarity?: LetterSimilarity;
+  /** CV bullets that break a writing rule: a weak opener, a pronoun, over two lines… */
+  style?: StyleNote[];
+  /** Whether the CV's text can be read back out of its PDF, as an applicant tracking system reads it. */
+  pdfText?: PdfTextCheck;
 }
