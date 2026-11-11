@@ -872,6 +872,8 @@ export class JobStore {
         r.sub_mode !== 'manual' ? 'this tool'
         : /on LinkedIn/.test(reason) ? 'LinkedIn'
         : /on Indeed/.test(reason) ? 'Indeed'
+        : /on Drushim/.test(reason) ? 'Drushim'
+        : /on JobMaster/.test(reason) ? 'JobMaster'
         : /on the company site/.test(reason) ? 'company site'
         : /per your email/.test(reason) ? 'from your email'
         : 'marked by you';

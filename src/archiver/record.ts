@@ -1,5 +1,6 @@
 import type { JobStore, ResponseRecord } from '../db/store.ts';
 import { recordApplications } from '../pipeline/applied.ts';
+import { jobBoardOf } from './classify.ts';
 import { groupApplications, matchApplication } from './report.ts';
 
 type Reply = Pick<ResponseRecord, 'company' | 'title' | 'kind' | 'receivedAt' | 'subject' | 'fromName' | 'fromAddress'>;
@@ -21,7 +22,8 @@ export function fileReply(store: JobStore, r: Reply, rows: Rows, now: string): {
   if (!company && !title) return { jobId: null, created: false };
   const { matched: known, added } = recordApplications(
     store,
-    [{ company, title, via: 'email', appliedAt: r.receivedAt, rejected: r.kind === 'rejection', subject: r.subject }],
+    // A reply from a job board says where you applied; any other only that you did.
+    [{ company, title, via: jobBoardOf(r) ?? 'email', appliedAt: r.receivedAt, rejected: r.kind === 'rejection', subject: r.subject }],
     now,
     { repliesToo: true },
   );

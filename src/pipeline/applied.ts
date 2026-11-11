@@ -79,7 +79,7 @@ function canonical(store: JobStore, job: JobRow): JobRow {
 }
 
 function note(app: AppliedEmail): string {
-  const via = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site', email: 'per your email' }[app.via];
+  const via = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site', email: 'per your email', drushim: 'on Drushim', jobmaster: 'on JobMaster' }[app.via];
   return `you applied ${via} on ${app.appliedAt.slice(0, 10)}${app.rejected ? '; they declined' : ''}`;
 }
 

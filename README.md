@@ -468,7 +468,9 @@ application, at most 90 days):
 
 1. **Sender and subject only.** Alerts, security codes and newsletters are skipped. An email is read if
    its subject is about an application or interview (English or Hebrew), or it comes from a company you
-   applied to or an applicant tracking system.
+   applied to, an applicant tracking system, or a job board you apply through (Drushim, JobMaster).
+   The boards' job alerts ("הסוכן החכם", "משרות חדשות"…) are still skipped. The first run after a board
+   is added goes back once over its mail from the last 90 days.
 2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
    goes to the local model, which answers: confirmation, viewed, rejection, assessment, interview,
    offer, update, or not about an application. It also gives the company, the role, a one-line summary,
@@ -477,8 +479,9 @@ application, at most 90 days):
    The same job sent through LinkedIn and the company site counts as one application. A reply with no
    application to file under (you applied yourself, and nothing recorded it) creates one: a
    confirmation, a rejection, an assessment, an interview or an offer all mean you applied, so the
-   application is recorded from the email, dated by it, as sent **from your email**, and counts in the
-   stats like any other. Only a reply naming a company or a role can be recorded; the rest stay listed
+   application is recorded from the email, dated by it, as sent **from your email** (or **Drushim** /
+   **JobMaster** when the board's own confirmation says so, which gives each its own row under "By how
+   you applied" in Stats), and counts in the stats like any other. Only a reply naming a company or a role can be recorded; the rest stay listed
    as unmatched in the report.
 4. **Report.** The **Applications** tab on the review page and `data/applications-report.md`: applied,
    waiting, assessment, interview, offer and rejected counts; how many applications were sent with this
