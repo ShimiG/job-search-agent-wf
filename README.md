@@ -569,7 +569,7 @@ Set a monthly spend limit in the [Claude Console](https://platform.claude.com) t
 
 ```bash
 # Scout
-npm run scout -- run [--no-score] [--open-review]
+npm run scout -- run [--no-score] [--batch] [--open-review]
 npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [--md]
 npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
