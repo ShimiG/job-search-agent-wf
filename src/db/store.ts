@@ -585,6 +585,20 @@ export class JobStore {
     return r ? toApplication(r) : undefined;
   }
 
+  /** The latest version of each other job's application since `sinceIso`, newest first. */
+  recentApplications(excludeJobId: number, sinceIso: string, limit = 100): ApplicationRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.* FROM applications a
+         JOIN (SELECT job_id, MAX(version) AS v FROM applications GROUP BY job_id) latest
+           ON latest.job_id = a.job_id AND latest.v = a.version
+         WHERE a.job_id != ? AND a.created_at >= ?
+         ORDER BY a.created_at DESC LIMIT ?`,
+      )
+      .all(excludeJobId, sinceIso, limit) as DbApplicationRow[];
+    return rows.map(toApplication);
+  }
+
   saveSubmission(sub: Omit<SubmissionRecord, 'id'>): SubmissionRecord {
     const info = this.db
       .prepare(

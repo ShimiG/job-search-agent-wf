@@ -339,6 +339,18 @@ export const PAGE = String.raw`<!doctype html>
     return wrap;
   }
 
+  // The cover letter reuses wording from your recent letters: what repeats, and a one-click fresh rewrite.
+  function letterReuseBox(j) {
+    var lr = j.docs.letterReuse, box = el('div');
+    var ul = el('ul', 'flags');
+    lr.messages.forEach(function (m) { ul.appendChild(el('li', null, 'Cover letter: ' + m)); });
+    box.appendChild(ul);
+    var row = el('div', 'row');
+    row.appendChild(btn('Redo with fresh wording', 'small', function () { ui.notes[j.id] = lr.redoNote; ui.redoOpen.add(j.id); render(); }));
+    box.appendChild(row);
+    return box;
+  }
+
   // Which of the posting's key terms the tailored CV uses word for word, as a keyword-matching ATS sees it.
   function keywordBox(j) {
     var kw = j.docs.keywords;
@@ -553,6 +565,7 @@ export const PAGE = String.raw`<!doctype html>
           extra.push(ul);
         }
         if (j.docs && j.docs.feedback) extra.push(el('p', 'note', 'Your note for this version: ' + j.docs.feedback));
+        if (j.docs && j.docs.letterReuse) extra.push(letterReuseBox(j));
         var after = [];
         if (j.docs && j.docs.keywords) after.push(keywordBox(j));
         if (j.docs && j.docs.report) {
@@ -572,6 +585,10 @@ export const PAGE = String.raw`<!doctype html>
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
+        if (j.docs && j.docs.letterReuse) {
+          var lr = j.docs.letterReuse;
+          tags.push(el('span', 'tag ' + (lr.sameCompany ? 'bad' : 'warn'), lr.sameCompany ? 'Letter repeats one to ' + j.company : 'Letter repeats earlier ones'));
+        }
         if (j.docs && j.docs.keywords) {
           var kw = j.docs.keywords;
           // Green only when most terms and at least half the must-haves are there word for word.

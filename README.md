@@ -342,6 +342,13 @@ model to ignore instructions inside them. After changing preferences or your CV,
    contain are dropped. Ready to send shows the count ("Keywords 9/14") and the lists, and
    **Redo using the terms your CV backs up** fills in a note for the Tailor. Terms your CV doesn't show
    are never added: the fact-check still applies.
+7. **Repeated letters.** Recruiters and AI-screening tools spot mass-produced letters by their repeated
+   prose: the same opening, the same closing line, a paragraph with only the company name swapped. Each
+   new letter is compared with your letters to other jobs from the last 90 days (locally, no cost).
+   Wording copied from your CV doesn't count, since restating your facts is expected. When 30% of the
+   letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
+   offers **Redo with fresh wording**. A repeat of a letter to the same company is marked in red: the
+   same people may read both. Redoing the same job never counts as a repeat.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.

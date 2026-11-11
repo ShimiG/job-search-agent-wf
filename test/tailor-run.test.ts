@@ -81,6 +81,29 @@ describe('runTailor', () => {
     assert.match(md, /LLM agents: "Developed LLM-powered support agents/);
   });
 
+  it("warns when a letter repeats your letter to another job, but not your own earlier version", async () => {
+    const writer = new FakeWriter(sampleDraft, fixLetter);
+    await runTailor(deps({ writer }));
+    const first = store.latestApplication(jobId)!.verification as VerificationReport;
+    assert.equal(first.letterSimilarity!.flagged, false, 'nothing earlier to compare with');
+
+    store.setTailorFeedback(jobId, 'shorter');
+    store.setStatus(jobId, 'selected', null, 'user', '2026-10-15T08:30:00.000Z');
+    await runTailor(deps({ writer }));
+    assert.equal((store.latestApplication(jobId)!.verification as VerificationReport).letterSimilarity!.flagged, false, 'v2 of the same job');
+
+    const other = store.upsert(makeJob({ externalId: 'beta:1', company: 'Beta', title: 'Integration Engineer', description: 'LLM agents and REST integrations.' }), '2026-10-15T08:00:00.000Z').id;
+    store.setStatus(other, 'selected', null, 'user', '2026-10-15T08:00:00.000Z');
+    await runTailor(deps({ writer }));
+    const app = store.latestApplication(other)!;
+    const report = app.verification as VerificationReport;
+    assert.equal(report.letterSimilarity!.flagged, true);
+    assert.equal(report.letterSimilarity!.closest!.jobId, jobId);
+    const warnings = report.issues.filter((i) => i.where === 'letter-wording').map((i) => i.message);
+    assert.match(warnings[0]!, /^\d+% of this letter's wording is the same as your letter to Acme \(#\d+, AI Automation Engineer\)$/);
+    assert.match(readFileSync(path.join(app.dir, 'report.md'), 'utf8'), /\*\*letter-wording\*\*: \d+% of this letter's wording/);
+  });
+
   it('flags the package when a letter claim survives the revision', async () => {
     const stats = await runTailor(deps({ writer: new FakeWriter(sampleDraft) })); // revision changes nothing
     assert.equal(stats.needsReview, 1);
