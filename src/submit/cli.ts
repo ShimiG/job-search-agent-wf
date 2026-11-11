@@ -4,10 +4,12 @@ import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, imapCredentialsFromEnv, loadJsonFile, resolvePaths } from '../config.ts';
 import { certificateFiles } from '../cv/certificates.ts';
 import { JobStore } from '../db/store.ts';
+import { CostMeter } from '../llm/cost.ts';
 import { TailorConfigSchema } from '../tailor/schema.ts';
 import { createLogger } from '../util/logger.ts';
 import { AnthropicFieldMapper } from './llm.ts';
 import { createImapCodeSource } from './otp.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import { markSubmitted, openBrowser, runSubmitter, type AssistInfo } from './run.ts';
 import { SubmitFileSchema, type PlannedAnswer, type SubmitMode } from './schema.ts';
 
@@ -89,7 +91,8 @@ async function main() {
       }
       const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
       const tailor = loadJsonFile(paths.tailor, TailorConfigSchema);
-      const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL }) : null;
+      const meter = new CostMeter('submitter');
+      const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL, meter }) : null;
       if (!mapper) logger.warn('ANTHROPIC_API_KEY not set: unusual questions will be left for you');
       const imap = imapCredentialsFromEnv();
       if (!imap) logger.warn('IMAP_USER / IMAP_PASSWORD not set: emailed security codes will be left for you');
@@ -99,7 +102,7 @@ async function main() {
         const jobIds = values.job ? values.job.split(',').map(parseId) : undefined;
         const stats = await runSubmitter(
           {
-            store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, onAssist: printAssist,
+            store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, meter, onAssist: printAssist,
             codes: imap ? createImapCodeSource(imap, logger) : null,
             certificates: certificateFiles(paths.certificatesDir),
           },
@@ -177,7 +180,8 @@ async function main() {
       const store = new JobStore(paths.db);
       try {
         markSubmitted(store, id, values.note ?? null);
-        console.log(`#${id}: recorded as submitted.`);
+        const { applied } = sweepAppliedListings(store, new Date().toISOString());
+        console.log(`#${id}: recorded as submitted.${applied ? ` ${applied} other listing(s) of it removed from Scout.` : ''}`);
       } finally {
         store.close();
       }

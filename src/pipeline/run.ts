@@ -2,6 +2,7 @@ import type { Preferences } from '../config.ts';
 import type { JobRow } from '../types.ts';
 import type { JobStore } from '../db/store.ts';
 import type { Scorer } from '../llm/scorer.ts';
+import type { CostMeter, UsagePurpose } from '../llm/cost.ts';
 import type { SourceAdapter } from '../sources/common.ts';
 import type { Http } from '../sources/http.ts';
 import type { Logger } from '../util/logger.ts';
@@ -10,7 +11,7 @@ import { enrichCost, type Enricher } from '../llm/enrich.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
 import { linkedinIdClock, linkedinJobId } from './age.ts';
 import { checkLinkedInJob, checkPostingPage, isLinkedInJob, type PageCheck } from './closed.ts';
-import { recordApplications } from './applied.ts';
+import { recordApplications, sweepAppliedListings } from './applied.ts';
 import { decideDuplicate } from './dedupe.ts';
 import { applyHardFilters } from './filters.ts';
 
@@ -31,6 +32,8 @@ export interface RunDeps {
   /** Re-opens LinkedIn alert jobs' public pages. Tests replace it; null turns it off (emailAlerts.checkClosed). */
   checkLinkedIn?: ((url: string) => Promise<PageCheck>) | null;
   clock?: () => Date;
+  /** The meter the scorer and enricher report to; stored with this run. */
+  meter?: CostMeter;
 }
 
 export interface RunStats {
@@ -41,6 +44,8 @@ export interface RunStats {
   closed: number;
   /** Jobs marked as applied from your confirmation emails (matched + added). */
   alreadyApplied: number;
+  /** Listings taken off because you already applied to that job, it's on its way to being sent, or you dismissed it. */
+  appliedListings: number;
   evaluated: number;
   filteredOut: number;
   duplicates: number;
@@ -55,6 +60,8 @@ export interface RunStats {
   closedPostings: number;
   /** Shortlisted alert jobs looked up on the web, how many full postings were found, and the cost in dollars. */
   enrich: { tried: number; found: number; cost: number };
+  /** Dollars spent on Claude this run, by what it was for (scoring, web lookups). */
+  cost: { total: number; byPurpose: Partial<Record<UsagePurpose, number>> };
   /** Still waiting after this run hit maxJobsPerRun. */
   scoringBacklog: number;
   filterReasons: Record<string, number>;
@@ -63,10 +70,11 @@ export interface RunStats {
 function emptyStats(): RunStats {
   return {
     sources: { ok: 0, failed: 0, errors: [] },
-    fetched: 0, inserted: 0, changed: 0, closed: 0, alreadyApplied: 0,
+    fetched: 0, inserted: 0, changed: 0, closed: 0, alreadyApplied: 0, appliedListings: 0,
     evaluated: 0, filteredOut: 0, duplicates: 0, queued: 0,
     scored: 0, shortlisted: 0, lowScore: 0, scoreErrors: 0, scoringBacklog: 0,
     enrich: { tried: 0, found: 0, cost: 0 },
+    cost: { total: 0, byPurpose: {} },
     oldAlerts: 0,
     closedPostings: 0,
     filterReasons: {},
@@ -79,9 +87,11 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
   const iso = () => clock().toISOString();
   const stats = emptyStats();
   const runId = store.startRun('scout', iso());
+  deps.meter?.attach(store, runId);
 
   await collect(deps, stats, iso);
   await markApplied(deps, stats, iso);
+  removeAppliedListings(deps, stats, iso);
   evaluate(deps, stats, clock);
   dropOldAlertJobs(deps, stats, clock);
   if (deps.scorer) {
@@ -90,10 +100,16 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
     logger.info('Scoring skipped (--no-score). Filtered jobs are waiting in the "queued" state.');
   }
   applyThresholds(deps, iso);
-  if (deps.scorer && deps.enricher) await enrichShortlist(deps, deps.enricher, deps.scorer, stats, iso, clock);
+  if (deps.scorer && deps.enricher) {
+    await enrichShortlist(deps, deps.enricher, deps.scorer, stats, iso, clock);
+    // A found posting's address can show it's the same page you applied on.
+    removeAppliedListings(deps, stats, iso);
+  }
   await dropClosedPostings(deps, stats, iso);
   stats.scoringBacklog = store.countScoringQueue(prefs.scoring.maxAttempts);
 
+  if (deps.meter) stats.cost = deps.meter.totals();
+  deps.meter?.detach();
   store.finishRun(runId, stats, iso());
   return stats;
 }
@@ -114,7 +130,7 @@ async function collect(deps: RunDeps, stats: RunStats, iso: () => string) {
       });
       write();
       stats.fetched += jobs.length;
-      if (adapter.snapshotPrefix) {
+      if (adapter.snapshotPrefix && (adapter.lastFetchComplete?.() ?? true)) {
         stats.closed += store.markMissingAsClosed(adapter.kind, adapter.snapshotPrefix, startedAt, iso());
       }
       store.sourceSucceeded(adapter.key, jobs.length, iso());
@@ -206,6 +222,24 @@ async function markApplied(deps: RunDeps, stats: RunStats, iso: () => string) {
   } catch (err) {
     deps.logger.warn(`could not read application confirmation emails: ${(err as Error).message}`);
   }
+}
+
+/**
+ * Step 1c: listings of jobs you've already applied to (by the Submitter, or yourself, from confirmation
+ * emails), are applying to, or dismissed leave Scout before filtering and scoring, so they cost nothing
+ * and never reach your shortlist. Also clears ones already on it when you applied somewhere else.
+ */
+function removeAppliedListings(deps: RunDeps, stats: RunStats, iso: () => string) {
+  const result = deps.store.db.transaction(() => sweepAppliedListings(deps.store, iso()))();
+  const removed = result.applied + result.inProgress + result.dismissed;
+  if (!removed) return;
+  stats.appliedListings += removed;
+  const parts = [
+    result.applied && `${result.applied} you already applied to`,
+    result.inProgress && `${result.inProgress} already being applied to`,
+    result.dismissed && `${result.dismissed} you dismissed`,
+  ].filter(Boolean);
+  deps.logger.info(`Skipped ${removed} listing(s) of jobs ${parts.join(', ')}`);
 }
 
 /** Step 2: cheap deterministic work. Hard filters first, then dedupe the survivors. */

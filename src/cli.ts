@@ -16,6 +16,7 @@ import {
 } from './config.ts';
 import { JobStore } from './db/store.ts';
 import { removeJob } from './decisions.ts';
+import { CostMeter } from './llm/cost.ts';
 import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
@@ -26,7 +27,10 @@ import { archive } from './archiver/run.ts';
 import { createScorer, scorerProblem } from './llm/scorer.ts';
 import { appliedEmailsSource } from './sources/applications.ts';
 import { formatJobDetail, formatJobList, formatMarkdown, formatRunStats } from './output/report.ts';
+import { sweepAppliedListings } from './pipeline/applied.ts';
+import { formatOutcomeReport, outcomeReport } from './pipeline/outcomes.ts';
 import { runScout } from './pipeline/run.ts';
+import { formatSpendingReport, spendingReport } from './pipeline/spending.ts';
 import { createBoardAdapter } from './sources/ats.ts';
 import type { SourceAdapter } from './sources/common.ts';
 import { DEFAULT_FEEDS, createEmailAlertAdapter } from './sources/email-alerts.ts';
@@ -52,6 +56,7 @@ Commands:
   dismiss <id...>              Drop jobs you don't want (status → dismissed)
   remove <id...>               Take jobs off every list, at any stage (sent ones are archived instead)
   sources                      Configured sources and their last fetch result
+  results                      Callback rates (by source, score and how you applied) and what the search has cost
   add-source <careers-url> [--company "Name"] [--token T]
                                Detect the ATS from a careers URL and add it to sources.json
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
@@ -129,6 +134,7 @@ async function commandCompareScorers(paths: Paths, logger: Logger, size: number)
 async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   const model = process.env.SCOUT_MODEL;
+  const meter = new CostMeter('scout');
   let cv: MasterCv | undefined;
   if (!noScore) {
     const problem = await scorerProblem(model);
@@ -138,12 +144,12 @@ async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
   }
   const store = new JobStore(paths.db);
   try {
-    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored() });
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
     const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
     const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
     // The web lookup is Claude's, so it needs the API key even when scoring is local.
-    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
+    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
+    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
     console.log('\n' + formatRunStats(stats));
     const shortlist = store.listByStatus(['shortlisted']);
     if (shortlist.length) console.log(`\n${shortlist.length} jobs on your shortlist. See them with: npm run scout -- list`);
@@ -202,6 +208,9 @@ function commandTransition(paths: Paths, ids: number[], to: 'selected' | 'dismis
       store.setStatus(id, to, null, 'user', now);
       console.log(`#${id}: ${job.company} — ${job.title} → ${to}`);
     }
+    const swept = sweepAppliedListings(store, now);
+    const others = swept.applied + swept.inProgress + swept.dismissed;
+    if (others) console.log(`${others} other listing(s) of these jobs removed from Scout.`);
   } finally {
     store.close();
   }
@@ -372,6 +381,16 @@ async function main() {
     }
     case 'sources':
       return commandSources(paths);
+    case 'results': {
+      const store = new JobStore(paths.db);
+      try {
+        console.log(formatOutcomeReport(outcomeReport(store)));
+        console.log('\n' + formatSpendingReport(spendingReport(store)));
+      } finally {
+        store.close();
+      }
+      return;
+    }
     case 'add-source':
       return commandAddSource(paths, args[0], values);
     case 'reevaluate': {

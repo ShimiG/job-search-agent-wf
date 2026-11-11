@@ -173,6 +173,11 @@ export function normalizeDraft(draft: Draft, cv: MasterCv, cfg: TailorConfig, le
       emphasized: draft.notes.emphasized.map((s) => s.trim()).filter(Boolean),
       requirementsNotMet: draft.notes.requirementsNotMet.map((s) => s.trim()).filter(Boolean),
     },
+    // Evidence must be real highlights; coverage itself is measured on the final text in keywords.ts.
+    keywords: (draft.keywords ?? [])
+      .map((k) => ({ term: k.term.trim(), cvTerm: k.cvTerm.trim() || k.term.trim(), required: Boolean(k.required), evidence: k.evidence.filter((id) => highlights.has(id)) }))
+      .filter((k) => k.term)
+      .slice(0, 25),
   };
   return { body, issues };
 }

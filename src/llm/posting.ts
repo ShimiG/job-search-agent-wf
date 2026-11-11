@@ -1,3 +1,4 @@
+import { usageCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -29,9 +30,6 @@ export interface PagePosting {
 export type LinkResult =
   | { ok: true; posting: PagePosting; finalUrl: string; cost: number }
   | { ok: false; closed?: boolean; reason: string; cost: number };
-
-const costOf = (u: Anthropic.Usage) =>
-  ((u.input_tokens + (u.cache_creation_input_tokens ?? 0)) * 2 + (u.cache_read_input_tokens ?? 0) * 0.2 + u.output_tokens * 10) / 1e6;
 
 /** The company named by an ATS link (job-boards.greenhouse.io/acme/... is Acme), for pages that don't say. */
 function companyFromUrl(url: string): string {
@@ -142,19 +140,23 @@ export function sameTitle(a: string, b: string): boolean {
 export async function extractPosting(
   pageText: string,
   job: Pick<JobRow, 'title' | 'company'> | null,
-  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; url?: string } = {},
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; url?: string; meter?: CostMeter } = {},
 ): Promise<Exclude<LinkResult, { finalUrl: string }> | { ok: true; posting: PagePosting; cost: number }> {
   if (looksClosed(pageText.slice(0, 20_000))) return { ok: false, closed: true, reason: 'the page says this job is no longer accepting applications', cost: 0 };
   if (pageText.length < 200) return { ok: false, reason: 'the page has almost no text (it may need a login)', cost: 0 };
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
+  const model = opts.model ?? 'claude-sonnet-5-5';
   const message = await client.messages.parse({
-    model: opts.model ?? 'claude-sonnet-5-5',
+    model,
     max_tokens: 8000,
     system: INSTRUCTIONS,
     messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
     output_config: { format: zodOutputFormat(Extract), effort: 'low' },
   });
-  const cost = costOf(message.usage);
+  const jobId = (job as { id?: unknown } | null)?.id;
+  const cost = opts.meter
+    ? opts.meter.record('posting', model, message.usage, typeof jobId === 'number' ? jobId : null)
+    : usageCost(model, message.usage);
   const x = message.parsed_output;
   if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the page could not be read', cost };
   if (!x.is_job_posting) return { ok: false, reason: "the page isn't a single job posting (a job list, a login or an error page?)", cost };
@@ -183,7 +185,7 @@ export async function extractPosting(
 export async function postingFromLink(
   url: string,
   job: Pick<JobRow, 'title' | 'company'> | null,
-  opts: { model?: string; browserPath?: string; client?: Pick<Anthropic, 'messages'> } = {},
+  opts: { model?: string; browserPath?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<LinkResult> {
   const bad = checkLink(url);
   if (bad) return { ok: false, reason: bad, cost: 0 };
@@ -211,19 +213,20 @@ Add nothing that isn't in the text.`;
 export async function pastedPosting(
   text: string,
   url: string,
-  opts: { model?: string; client?: Pick<Anthropic, 'messages'> } = {},
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<{ ok: true; posting: PagePosting; cost: number } | { ok: false; reason: string; cost: number }> {
   const description = text.trim();
   if (description.length < 200) return { ok: false, reason: 'the description is too short to score or tailor from: paste the whole posting', cost: 0 };
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
+  const model = opts.model ?? 'claude-sonnet-5-5';
   const message = await client.messages.parse({
-    model: opts.model ?? 'claude-sonnet-5-5',
+    model,
     max_tokens: 1000,
     system: DETAILS_INSTRUCTIONS,
     messages: [{ role: 'user', content: `<posting>\n${description.slice(0, 60_000)}\n</posting>` }],
     output_config: { format: zodOutputFormat(Details), effort: 'low' },
   });
-  const cost = costOf(message.usage);
+  const cost = opts.meter ? opts.meter.record('posting', model, message.usage) : usageCost(model, message.usage);
   const x = message.parsed_output;
   if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the description could not be read', cost };
   if (!x.is_job_posting) return { ok: false, reason: "that text doesn't look like a job posting", cost };

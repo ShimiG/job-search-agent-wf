@@ -5,6 +5,8 @@ import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, loadJsonFile, resolvePaths } from '../config.ts';
 import { withCertificates } from '../cv/certificates.ts';
 import { JobStore } from '../db/store.ts';
+import { CostMeter, formatDollars } from '../llm/cost.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import type { JobStatus } from '../types.ts';
 import { createLogger } from '../util/logger.ts';
 import { AnthropicTailor } from './llm.ts';
@@ -76,15 +78,17 @@ async function main() {
       if (!process.env.ANTHROPIC_API_KEY) throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env.');
       const cfg = loadTailorConfig();
       const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
-      const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL });
+      const meter = new CostMeter('tailor');
+      const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL, meter });
       const jobIds = values.job ? values.job.split(',').map((v) => parseId(v)) : undefined;
       const db = store();
       try {
         const stats = await withPdf(cfg.pdf.enabled && !values['no-pdf'], cfg.pdf.browserPath, (pdf) =>
-          runTailor({ store: db, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger, model: llm.model }, { jobIds }),
+          runTailor({ store: db, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger, model: llm.model, meter }, { jobIds }),
         );
         if (stats.attempted) {
           console.log(`\nTailored ${stats.tailored}/${stats.attempted}${stats.needsReview ? `, ${stats.needsReview} need your review` : ''}${stats.errors.length ? `, ${stats.errors.length} failed` : ''}.`);
+          if (stats.cost) console.log(`Cost: about ${formatDollars(stats.cost)}.`);
           console.log('Review with: npm run tailor -- list');
         }
       } finally {
@@ -161,6 +165,7 @@ async function main() {
         } else if (command === 'reject') {
           if (!['tailored', 'selected', 'tailor_error', 'approved'].includes(job.status)) throw new ConfigError(`#${id} is "${job.status}".`);
           db.setStatus(id, 'dismissed', 'rejected at review', 'user', now);
+          sweepAppliedListings(db, now);
           console.log(`#${id}: dismissed.`);
         } else {
           if (!values.note) throw new ConfigError('Say what to change: redo <id> --note "lead with the integration work"');

@@ -48,6 +48,12 @@ export function sampleDraft(): Draft {
       closing: 'I would be glad to walk you through these flows.',
     },
     notes: { emphasized: ['LLM agents first'], requirementsNotMet: ['Kubernetes'] },
+    keywords: [
+      { term: 'LLM agents', cvTerm: 'LLM agents', required: true, evidence: ['acme-llm-agents'] },
+      { term: 'Kubernetes', cvTerm: 'Kubernetes', required: true, evidence: ['not-a-real-id'] },
+      { term: 'REST', cvTerm: 'REST', required: false, evidence: ['acme-booking'] },
+      { term: 'SOAP', cvTerm: 'SOAP', required: false, evidence: ['acme-booking'] }, // not in the posting: dropped
+    ],
   };
 }
 

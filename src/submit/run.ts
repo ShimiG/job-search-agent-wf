@@ -1,3 +1,4 @@
+import { withJob, type CostMeter } from '../llm/cost.ts';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, LaunchOptions, Page } from 'playwright-core';
@@ -10,7 +11,7 @@ import { sleep } from '../util/limiter.ts';
 import type { Logger } from '../util/logger.ts';
 import { buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type Documents } from './answers.ts';
 import { detectBlockers, detectConfirmation, detectInvisibleCheck, extractFields, fillAnswer, fillCode, findCodeFields, findFormFrame, findSubmitButton, guardSubmit, highlight, pageMentionsTitle, revealForm } from './form.ts';
-import { applyMapped, type FieldMapper } from './llm.ts';
+import { mapWithRetry, type FieldMapper } from './llm.ts';
 import type { CodeSource } from './otp.ts';
 import { MODEL_SOURCES, type AnswersConfig, type PlannedAnswer, type SubmitConfig, type SubmitMode } from './schema.ts';
 
@@ -79,6 +80,8 @@ export interface SubmitDeps {
   onAssist?: (info: AssistInfo) => Promise<void> | void;
   clock?: () => Date;
   timing?: Partial<Timing>;
+  /** The meter the field mapper reports to; stored with this run. */
+  meter?: CostMeter;
 }
 
 interface Timing {
@@ -252,15 +255,20 @@ export async function submitJob(job: JobRow, mode: SubmitMode, deps: SubmitDeps)
     const ask = forModel(plan);
     if (ask.length && deps.mapper) {
       try {
-        const mapped = await deps.mapper.map({
-          fields: formFields.filter((f) => ask.some((a) => a.key === f.key)),
-          job: { title: job.title, company: job.company, location: job.location },
-          profile,
-          answers: deps.answers,
-          cv: deps.cv,
-          tailored,
-        });
-        applyMapped(plan, formFields, new Set(ask.map((a) => a.key)), mapped);
+        const { retried, recovered } = await mapWithRetry(
+          deps.mapper,
+          {
+            fields: formFields.filter((f) => ask.some((a) => a.key === f.key)),
+            job: { title: job.title, company: job.company, location: job.location },
+            profile,
+            answers: deps.answers,
+            cv: deps.cv,
+            tailored,
+          },
+          plan,
+          formFields,
+        );
+        if (retried) logger.info(`#${job.id}: asked again about ${retried} answer(s) that didn't fit the form; ${recovered} now do`);
       } catch (err) {
         logger.warn(`#${job.id}: model could not help with ${ask.length} question(s): ${(err as Error).message}`);
       }
@@ -343,6 +351,8 @@ export interface SubmitRunStats {
   prepared: number;
   needsManual: number;
   failed: number;
+  /** Dollars spent on Claude this run, when a meter was given. */
+  cost?: number;
 }
 
 export async function runSubmitter(deps: SubmitDeps, mode: SubmitMode, opts: { jobIds?: number[] } = {}): Promise<SubmitRunStats> {
@@ -367,11 +377,12 @@ export async function runSubmitter(deps: SubmitDeps, mode: SubmitMode, opts: { j
   }
 
   const runId = store.startRun('submitter', new Date().toISOString());
+  deps.meter?.attach(store, runId);
   for (const [i, job] of jobs.entries()) {
     if (mode === 'auto' && i > 0 && t.betweenMs > 0) await sleep(t.betweenMs);
     stats.attempted++;
     try {
-      const record = await submitJob(job, mode, deps);
+      const record = await withJob(job.id, () => submitJob(job, mode, deps));
       if (record.outcome === 'submitted') stats.submitted++;
       else if (record.outcome === 'prepared') stats.prepared++;
       else if (record.outcome === 'needs_manual') stats.needsManual++;
@@ -381,6 +392,8 @@ export async function runSubmitter(deps: SubmitDeps, mode: SubmitMode, opts: { j
       logger.warn(`#${job.id}: ${(err as Error).message}`);
     }
   }
+  if (deps.meter) stats.cost = deps.meter.totals().total;
+  deps.meter?.detach();
   store.finishRun(runId, { mode, ...stats }, new Date().toISOString());
   return stats;
 }

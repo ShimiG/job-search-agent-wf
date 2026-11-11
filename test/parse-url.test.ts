@@ -39,6 +39,25 @@ describe('detectBoard', () => {
     assert.deepEqual(withToken.board, { ats: 'comeet', uid: 'A1.B2C', token: 'T0K', company: 'Epsilon', enabled: true });
   });
 
+  it('reads Workday careers sites from any page of them', () => {
+    const expected = { ats: 'workday', host: 'nvidia.wd5.myworkdayjobs.com', tenant: 'nvidia', site: 'NVIDIAExternalCareerSite', company: 'Nvidia', search: [], maxJobs: 200, enabled: true };
+    for (const url of [
+      'https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite',
+      'https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/Israel-Tel-Aviv/Engineer_JR1993?q=x',
+      'https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs',
+    ]) {
+      assert.deepEqual(detectBoard(url), { ok: true, board: expected }, url);
+    }
+    assert.equal(detectBoard('https://nvidia.wd5.myworkdayjobs.com/').ok, false);
+  });
+
+  it('reads SmartRecruiters company pages and job links', () => {
+    for (const url of ['https://careers.smartrecruiters.com/Visa', 'https://jobs.smartrecruiters.com/Visa/744000012345-engineer', 'https://api.smartrecruiters.com/v1/companies/Visa/postings']) {
+      const r = detectBoard(url);
+      assert.ok(r.ok && r.board.ats === 'smartrecruiters' && r.board.token === 'Visa', url);
+    }
+  });
+
   it('rejects unknown sites and job links', () => {
     assert.equal(detectBoard('https://www.linkedin.com/jobs/view/123').ok, false);
     assert.equal(detectBoard('https://apply.workable.com/j/ABC123').ok, false);

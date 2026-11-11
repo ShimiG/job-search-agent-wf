@@ -1,3 +1,4 @@
+import type { ApiUsage, CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -146,6 +147,8 @@ export interface AnthropicScorerOptions {
   advisor?: string | null;
   apiKey?: string;
   client?: Pick<Anthropic, 'messages' | 'beta'>;
+  /** Records what each call costs. */
+  meter?: CostMeter;
 }
 
 export class AnthropicScorer implements Scorer {
@@ -155,6 +158,7 @@ export class AnthropicScorer implements Scorer {
   private readonly executor: string;
   private readonly advisor: string | null;
   private readonly profile: string;
+  private readonly meter?: CostMeter;
 
   constructor(opts: AnthropicScorerOptions) {
     this.client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 4, timeout: 60_000 });
@@ -162,6 +166,7 @@ export class AnthropicScorer implements Scorer {
     this.advisor = opts.advisor ?? null;
     this.model = this.advisor ? `${this.executor}+advisor:${this.advisor}` : this.executor;
     this.profile = buildCandidateProfile(opts.cv, opts.prefs);
+    this.meter = opts.meter;
   }
 
   async score(job: NormalizedJob): Promise<ScoreResult> {
@@ -187,6 +192,15 @@ export class AnthropicScorer implements Scorer {
           tools: [{ type: 'advisor_20260301', name: 'advisor', model: this.advisor, max_uses: 1, max_tokens: ADVISOR_MAX_TOKENS, caching: { type: 'ephemeral' } }],
         })
       : await this.client.messages.parse(request);
+    if (this.meter) {
+      const jobId = (job as { id?: unknown }).id;
+      const forJob = typeof jobId === 'number' ? jobId : null;
+      this.meter.record('score', this.executor, message.usage, forJob);
+      // What the advisor read and wrote is billed at its own rates, reported per iteration.
+      for (const step of (message.usage as { iterations?: Array<ApiUsage & { type?: string; model?: string }> | null }).iterations ?? []) {
+        if (step.type === 'advisor_message') this.meter.record('score', step.model ?? this.advisor ?? this.executor, step, forJob);
+      }
+    }
     if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
     if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');
     if (!message.parsed_output) throw new Error('Model returned no structured output');
@@ -253,10 +267,11 @@ export class OllamaScorer implements Scorer {
  * Claude, or a local model when `model` is "ollama:<name>". Examples are only read for a local
  * model, and only when it's built.
  */
-export function createScorer(opts: { cv: MasterCv; prefs: Preferences; model?: string; examples?: () => ScoredExample[] }): Scorer {
+export function createScorer(opts: { cv: MasterCv; prefs: Preferences; model?: string; examples?: () => ScoredExample[]; meter?: CostMeter }): Scorer {
   const local = ollamaModel(opts.model);
   if (local) return new OllamaScorer({ cv: opts.cv, prefs: opts.prefs, model: local, examples: pickExamples(opts.examples?.() ?? [], 8) });
-  return new AnthropicScorer({ cv: opts.cv, prefs: opts.prefs, model: opts.model, advisor: advisorModel(opts.model) });
+  // A local model costs nothing, so only Claude's calls reach the meter.
+  return new AnthropicScorer({ cv: opts.cv, prefs: opts.prefs, model: opts.model, advisor: advisorModel(opts.model), meter: opts.meter });
 }
 
 /** Why scoring with `model` can't run right now, or null when it can. */

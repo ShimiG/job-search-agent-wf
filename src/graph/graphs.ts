@@ -24,6 +24,7 @@ import { archive, type ArchiverStats } from '../archiver/run.ts';
 import { AnthropicEnricher } from '../llm/enrich.ts';
 import { createScorer, scorerProblem } from '../llm/scorer.ts';
 import { runScout, type RunStats } from '../pipeline/run.ts';
+import { CostMeter } from '../llm/cost.ts';
 import { appliedEmailsSource } from '../sources/applications.ts';
 import { createBoardAdapter } from '../sources/ats.ts';
 import type { SourceAdapter } from '../sources/common.ts';
@@ -83,6 +84,7 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
   const logger = createLogger();
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   const model = process.env.SCOUT_MODEL;
+  const meter = new CostMeter('scout');
   let cv: MasterCv | undefined;
   if (!noScore) {
     if (!cvStatus().ready) throw new ConfigError(UPLOAD_CV_FIRST);
@@ -93,10 +95,10 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
   const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
   const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
   return withStore((store) => {
-    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored() });
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
     // The web lookup is Claude's, so it needs the API key even when scoring is local.
-    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-    return runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
+    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
+    return runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
   });
 }
 
@@ -107,11 +109,12 @@ export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): 
   const cfg = loadJsonFile(paths.tailor, TailorConfigSchema);
   // Your uploaded certificates are part of the CV the Tailor writes and fact-checks from.
   const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
-  const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL });
+  const meter = new CostMeter('tailor');
+  const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL, meter });
   const pdf = cfg.pdf.enabled && !noPdf ? await launchPdfEngine(cfg.pdf.browserPath) : null;
   try {
     return await withStore((store) =>
-      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(), model: llm.model }, { jobIds }),
+      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(), model: llm.model, meter }, { jobIds }),
     );
   } finally {
     await pdf?.close();
@@ -129,7 +132,8 @@ export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode
   }
   const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
   const tailor = loadJsonFile(paths.tailor, TailorConfigSchema);
-  const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL }) : null;
+  const meter = new CostMeter('submitter');
+  const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL, meter }) : null;
   if (!mapper) logger.warn('ANTHROPIC_API_KEY not set: unusual questions will be left for you');
   const imap = imapCredentialsFromEnv();
   const browser = await openBrowser({ browserPath: settings.browserPath, headless: mode !== 'assist', userDataDir: paths.browserProfile });
@@ -142,6 +146,7 @@ export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode
           answers: settings,
           contact: tailor.contact,
           cfg: settings,
+          meter,
           mapper,
           browser,
           logger,

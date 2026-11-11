@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { KeywordCoverage } from './keywords.ts';
+import type { LetterSimilarity } from './similarity.ts';
 
 export const SUPPORTED_LANGUAGES = ['en', 'he', 'ru'] as const;
 export type OutputLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -82,8 +84,19 @@ export const DraftSchema = z.object({
     emphasized: z.array(z.string()).describe('What you chose to emphasize and why, briefly'),
     requirementsNotMet: z.array(z.string()).describe('Posting requirements the CV does not support'),
   }),
+  keywords: z
+    .array(
+      z.object({
+        term: z.string().describe("The requirement exactly as the posting words it: a tool, skill, qualification or domain, 1-4 words"),
+        cvTerm: z.string().describe("The same term in the CV's language; identical when they share a language"),
+        required: z.boolean().describe('true for a must-have, false for a nice-to-have'),
+        evidence: z.array(z.string()).describe('Highlight ids that genuinely show this, in any wording. Empty if the CV does not show it.'),
+      }),
+    )
+    .describe('The 8-20 terms a keyword-matching ATS would search this posting for, most important first'),
 });
 export type Draft = z.infer<typeof DraftSchema>;
+export type PostingKeyword = Draft['keywords'][number];
 
 export const VerdictSchema = z.object({
   claims: z.array(
@@ -127,6 +140,8 @@ export interface TailoredContent {
   certifications?: string[];
   coverLetter: { greeting: string; paragraphs: string[]; closing: string; signOff: string };
   notes: { emphasized: string[]; requirementsNotMet: string[] };
+  /** The posting's key terms, as the writer read them. Coverage is checked against the CV text, not trusted. */
+  keywords?: PostingKeyword[];
   generatedAt: string;
 }
 
@@ -137,4 +152,8 @@ export interface VerificationReport {
   llmChecked: boolean;
   revised: boolean;
   cvPages?: number;
+  /** Which of the posting's key terms the CV uses word for word, as a keyword-matching ATS would see it. */
+  keywords?: KeywordCoverage;
+  /** How much of the cover letter's wording repeats your recent letters to other jobs. */
+  letterSimilarity?: LetterSimilarity;
 }

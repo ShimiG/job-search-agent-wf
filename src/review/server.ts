@@ -13,17 +13,23 @@ import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
 import { applyPicks, applyReview, removeJob } from '../decisions.ts';
 import { JobStore } from '../db/store.ts';
 import { scoutAgent, sendWithoutReview, submitAgent, tailorAgent } from '../graph/graphs.ts';
+import { CostMeter } from '../llm/cost.ts';
 import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
 import { checkApplyPage, pastedPosting, postingFromLink } from '../llm/posting.ts';
 import { createScorer } from '../llm/scorer.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import { addManualJob } from '../pipeline/manual.ts';
+import { outcomeReport, WAITING_DAYS } from '../pipeline/outcomes.ts';
 import { placeByScore, resortByCutoff } from '../pipeline/run.ts';
+import { spendingReport } from '../pipeline/spending.ts';
 import { saveShortlistCutoff, shortlistCutoff } from '../settings.ts';
 import { ARCHIVE_AFTER_DAYS, buildReport, groupApplications, isArchived, STAGES } from '../archiver/report.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
 import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts';
 import type { JobRow } from '../types.ts';
+import { redoNote } from '../tailor/keywords.ts';
+import { similarityRedoNote } from '../tailor/similarity.ts';
 import { PAGE } from './page.ts';
 
 /*
@@ -80,6 +86,22 @@ function phoneLinks() {
     .sort((a, b) => Number(b.via.startsWith('Tailscale')) - Number(a.via.startsWith('Tailscale')));
 }
 const MODES = ['prepare', 'assist', 'auto'] as const;
+
+/**
+ * A meter for Claude calls this page makes itself (CV upload, a pasted link, "find the application
+ * page"). Runs `fn`, then saves what it spent, whether or not it succeeded.
+ */
+async function metered<T>(fn: (meter: CostMeter) => Promise<T>): Promise<T> {
+  const meter = new CostMeter('review');
+  try {
+    return await fn(meter);
+  } finally {
+    withStore((store) => {
+      meter.attach(store);
+      meter.detach();
+    });
+  }
+}
 
 function withStore<T>(fn: (store: JobStore) => T): T {
   const store = new JobStore(resolvePaths().db);
@@ -227,6 +249,15 @@ function documents(store: JobStore, j: JobRow) {
     unverified: report.issues.filter((i) => i.severity === 'unresolved').map((i) => `${i.where}: ${i.message}`),
     report: files.includes('report.md') ? readFileSync(path.join(app.dir, 'report.md'), 'utf8').slice(0, 20_000) : '',
     feedback: app.feedback,
+    keywords: report.keywords?.total ? { ...report.keywords, redoNote: redoNote(report.keywords) } : null,
+    letterReuse: report.letterSimilarity?.flagged
+      ? {
+          sameCompany: report.letterSimilarity.sameCompany,
+          closest: report.letterSimilarity.closest,
+          messages: report.issues.filter((i) => i.where === 'letter-wording').map((i) => i.message),
+          redoNote: similarityRedoNote(report.letterSimilarity),
+        }
+      : null,
   };
 }
 
@@ -258,6 +289,9 @@ function scouting(store: JobStore) {
   return { startedAt: run.startedAt, scored, remaining: Math.max(0, Math.min(waiting, prefs.scoring.maxJobsPerRun - scored)) };
 }
 
+/** Dollars of Claude calls tied to this job so far (scoring, lookup, tailoring, form answers), or null. */
+const spentOn = (store: JobStore, jobId: number) => store.usageForJob(jobId) || null;
+
 async function state() {
   await refreshTasks();
   const conn = await connection();
@@ -279,8 +313,10 @@ async function state() {
       scouting: scouting(store),
       shortlist: store.listByStatus(['shortlisted']).map(view),
       tailoring: store.listByStatus(['selected', 'tailor_error']).map(view),
-      ready: store.listByStatus(['tailored']).map((j) => ({ ...view(j), docs: documents(store, j) })),
-      sending: store.listByStatus(['approved', 'needs_manual', 'failed']).map((j) => ({ ...view(j), docs: documents(store, j), last: lastAttempt(store, j) })),
+      ready: store.listByStatus(['tailored']).map((j) => ({ ...view(j), docs: documents(store, j), spent: spentOn(store, j.id) })),
+      sending: store
+        .listByStatus(['approved', 'needs_manual', 'failed'])
+        .map((j) => ({ ...view(j), docs: documents(store, j), last: lastAttempt(store, j), spent: spentOn(store, j.id) })),
     })),
   };
 }
@@ -367,6 +403,9 @@ function applicationsView() {
       notSent: store.listByStatus(['archived']).map((j) => ({ ...view(j), docs: documentsOf(store, [j.id]), archivedAt: store.history(j.id).at(-1)?.at ?? null })),
       unmatched: report.unmatched.map(strip),
       lastRun: last ? { startedAt: last.startedAt, finishedAt: last.finishedAt } : null,
+      // For Stats: the same applications by where Scout found them and by score, and what Claude has cost.
+      breakdown: { ...outcomeReport(store, now), waitingDays: WAITING_DAYS },
+      spending: spendingReport(store, now),
     };
   });
 }
@@ -420,7 +459,7 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     // Decided by the file's content, not its name: a PDF starts with %PDF, a .docx is a zip.
     const kind = file.subarray(0, 4).toString('latin1') === '%PDF' ? 'pdf' : file[0] === 0x50 && file[1] === 0x4b ? 'docx' : null;
     if (!kind) throw new Error('Upload a PDF or a Word (.docx) file');
-    return importCv({ data: file, kind }, { model: process.env.TAILOR_MODEL });
+    return metered((meter) => importCv({ data: file, kind }, { model: process.env.TAILOR_MODEL, meter }));
   },
 
   /** Saves a previewed CV as the master CV (the old one is kept as a backup) and your contact details. */
@@ -563,7 +602,7 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set');
     const job = withStore((store) => store.get(id));
     if (!job) throw new Error(`#${id}: not found`);
-    const result = await new AnthropicEnricher({ model: process.env.ENRICH_MODEL }).find(job);
+    const result = await metered((meter) => new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }).find(job));
     const cost = enrichCost(result.usage);
     const now = new Date().toISOString();
     if (result.closed) {
@@ -616,7 +655,9 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
 
     // Shortlist (or waiting to be tailored): read the full posting, score it, tailor from it.
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set in .env');
-    const result = await postingFromLink(url, job, { model: process.env.ENRICH_MODEL ?? process.env.TAILOR_MODEL, browserPath: settings?.browserPath });
+    const result = await metered((meter) =>
+      postingFromLink(url, job, { model: process.env.ENRICH_MODEL ?? process.env.TAILOR_MODEL, browserPath: settings?.browserPath, meter }),
+    );
     if (!result.ok) {
       if (result.closed) withStore((store) => store.markClosed(id, `no longer accepting applications (${url})`, now()));
       return result;
@@ -630,8 +671,16 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     try {
       const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
       const full = withStore((store) => store.get(id)!);
-      const scorer = createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => withStore((store) => store.listClaudeScored()) });
-      const scored = await scorer.score(full);
+      const { scored, scorer } = await metered(async (meter) => {
+        const scorer = createScorer({
+          cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir),
+          prefs,
+          model: process.env.SCOUT_MODEL,
+          examples: () => withStore((store) => store.listClaudeScored()),
+          meter,
+        });
+        return { scored: await scorer.score(full), scorer };
+      });
       score = scored.score;
       withStore((store) => store.saveScore(id, scored, placeByScore(full, scored.score, prefs), now(), scorer.model ?? null));
     } catch {
@@ -662,14 +711,17 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     let result;
     try {
       console.log(`Add a job: ${url}${description.trim() ? ' with a description' : ''}, then ${next}`);
+      // What reading the posting and scoring it cost is saved as it happens.
+      const meter = new CostMeter('review');
+      meter.attach(store);
       result = await addManualJob(
         { url, description, next },
         {
           store,
           prefs,
-          scorer: createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => store.listClaudeScored() }),
-          readPage: (link) => postingFromLink(link, null, { model, browserPath: settings?.browserPath }),
-          readPasted: (text, link) => pastedPosting(text, link, { model }),
+          scorer: createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => store.listClaudeScored(), meter }),
+          readPage: (link) => postingFromLink(link, null, { model, browserPath: settings?.browserPath, meter }),
+          readPasted: (text, link) => pastedPosting(text, link, { model, meter }),
         },
       );
     } catch (err) {
@@ -693,8 +745,12 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
   /** You applied yourself (on LinkedIn, say): record it so nothing applies again. */
   async markApplied(body) {
     const { id } = z.object({ id: z.number().int().positive() }).parse(body);
-    withStore((store) => markSubmitted(store, id, 'you applied yourself (review page)'));
-    return { marked: id };
+    // Other listings of the same job (another board, an alert email) leave your shortlist with it.
+    const swept = withStore((store) => {
+      markSubmitted(store, id, 'you applied yourself (review page)');
+      return sweepAppliedListings(store, new Date().toISOString());
+    });
+    return { marked: id, otherListings: swept.applied };
   },
 
   /** Ends the current pipeline run where it's paused, e.g. an old one left waiting with another mode. */

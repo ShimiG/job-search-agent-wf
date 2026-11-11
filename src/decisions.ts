@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { JobStore } from './db/store.ts';
+import { sweepAppliedListings } from './pipeline/applied.ts';
 import type { VerificationReport } from './tailor/schema.ts';
 import type { JobStatus } from './types.ts';
 
@@ -58,7 +59,9 @@ export function applyPicks(store: JobStore, answer: z.input<typeof PickAnswerSch
   const { pick, dismiss } = PickAnswerSchema.parse(answer);
   const skipped: Skipped[] = [];
   const picked = move(store, pick, 'selected', PICK_FROM.selected, null, skipped);
-  move(store, dismiss, 'dismissed', PICK_FROM.dismissed, null, skipped);
+  const dismissed = move(store, dismiss, 'dismissed', PICK_FROM.dismissed, null, skipped);
+  // Other listings of what you picked or dismissed (another board, an alert email) leave the shortlist with it.
+  if (picked.length || dismissed.length) sweepAppliedListings(store, new Date().toISOString());
   return { picked, skipped };
 }
 
@@ -85,7 +88,8 @@ export function applyReview(
     store.setStatus(id, 'approved', open ? `approved with ${open} unverified item(s)` : null, 'user', now);
     approved.push(id);
   }
-  move(store, reject, 'dismissed', ['tailored', 'selected', 'tailor_error', 'approved'], 'rejected at review', skipped);
+  const rejected = move(store, reject, 'dismissed', ['tailored', 'selected', 'tailor_error', 'approved'], 'rejected at review', skipped);
+  if (rejected.length) sweepAppliedListings(store, now);
   return { approved, skipped, ...(mode ? { mode } : {}) };
 }
 

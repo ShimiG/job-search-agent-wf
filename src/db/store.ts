@@ -1,12 +1,13 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import type { UsageEntry } from '../llm/cost.ts';
 import type { JobRow, JobStatus, NormalizedJob, ScoreResult } from '../types.ts';
 import { isScoutOwned } from '../types.ts';
 import { normalizeCompany, normalizeTitle, sha256 } from '../util/text.ts';
 
-/** Append-only. Each entry runs once, tracked with PRAGMA user_version. */
-const MIGRATIONS: string[] = [
+/** Append-only. Each entry runs once, tracked with PRAGMA user_version. SQL, or a function for a step SQL can't express. */
+const MIGRATIONS: Array<string | ((db: Database.Database) => void)> = [
   `
   CREATE TABLE jobs (
     id                      INTEGER PRIMARY KEY,
@@ -158,6 +159,40 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE jobs ADD COLUMN archive_choice TEXT;
   `,
+  // 10: One row per Claude call, with what it cost, for spending reports. Also repairs a database
+  // that ran an earlier build whose versions 6 and 7 were a different replies table and this usage
+  // table: it gets the columns and tables of 6 and 7 above (its old replies are read again by the Archiver).
+  (db) => {
+    const has = (table: string, column?: string) =>
+      column
+        ? (db.pragma(`table_info(${table})`) as Array<{ name: string }>).some((c) => c.name === column)
+        : Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table));
+    if (!has('jobs', 'scored_by')) db.exec(MIGRATIONS[5] as string);
+    if (!has('responses', 'message_id')) {
+      db.exec('DROP TABLE IF EXISTS responses');
+      db.exec(MIGRATIONS[6] as string);
+    }
+    if (has('usage')) return;
+    db.exec(`
+  CREATE TABLE usage (
+    id                 INTEGER PRIMARY KEY,
+    at                 TEXT NOT NULL,
+    agent              TEXT NOT NULL,
+    purpose            TEXT NOT NULL,
+    model              TEXT NOT NULL,
+    job_id             INTEGER REFERENCES jobs(id),
+    run_id             INTEGER REFERENCES runs(id),
+    input_tokens       INTEGER NOT NULL,
+    output_tokens      INTEGER NOT NULL,
+    cache_read_tokens  INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    web_searches       INTEGER NOT NULL,
+    cost               REAL NOT NULL
+  );
+  CREATE INDEX idx_usage_at ON usage(at);
+  CREATE INDEX idx_usage_job ON usage(job_id);
+    `);
+  },
 ];
 
 export interface ResponseRecord {
@@ -275,6 +310,7 @@ interface DbJobRow {
   first_seen_at: string;
   last_seen_at: string;
   closed_at: string | null;
+  updated_at: string;
   tailor_feedback: string | null;
   enriched_at: string | null;
   posting_url: string | null;
@@ -353,7 +389,9 @@ export class JobStore {
     const current = this.db.pragma('user_version', { simple: true }) as number;
     for (let v = current; v < MIGRATIONS.length; v++) {
       this.db.transaction(() => {
-        this.db.exec(MIGRATIONS[v]!);
+        const step = MIGRATIONS[v]!;
+        if (typeof step === 'string') this.db.exec(step);
+        else step(this.db);
         this.db.pragma(`user_version = ${v + 1}`);
       })();
     }
@@ -659,6 +697,20 @@ export class JobStore {
     return r ? { ...toApplication(r), dir: this.relocate(r.dir) } : undefined;
   }
 
+  /** The latest version of each other job's application since `sinceIso`, newest first. */
+  recentApplications(excludeJobId: number, sinceIso: string, limit = 100): ApplicationRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.* FROM applications a
+         JOIN (SELECT job_id, MAX(version) AS v FROM applications GROUP BY job_id) latest
+           ON latest.job_id = a.job_id AND latest.v = a.version
+         WHERE a.job_id != ? AND a.created_at >= ?
+         ORDER BY a.created_at DESC LIMIT ?`,
+      )
+      .all(excludeJobId, sinceIso, limit) as DbApplicationRow[];
+    return rows.map(toApplication);
+  }
+
   saveSubmission(sub: Omit<SubmissionRecord, 'id'>): SubmissionRecord {
     const info = this.db
       .prepare(
@@ -732,6 +784,32 @@ export class JobStore {
   /** Jobs scored at or after `sinceIso`: a running Scout's progress. */
   countScoredSince(sinceIso: string): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE scored_at >= ?').get(sinceIso) as { n: number }).n;
+  }
+
+  saveUsage(u: UsageEntry): void {
+    this.db
+      .prepare(
+        `INSERT INTO usage (at, agent, purpose, model, job_id, run_id, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, web_searches, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(u.at, u.agent, u.purpose, u.model, u.jobId, u.runId, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.webSearches, u.cost);
+  }
+
+  /** Spending since `sinceIso` (all time when omitted), by what the calls were for. */
+  usageByPurpose(sinceIso?: string): Array<{ purpose: string; calls: number; cost: number }> {
+    return this.db
+      .prepare('SELECT purpose, COUNT(*) AS calls, SUM(cost) AS cost FROM usage WHERE at >= ? GROUP BY purpose ORDER BY cost DESC')
+      .all(sinceIso ?? '') as Array<{ purpose: string; calls: number; cost: number }>;
+  }
+
+  /** Dollars spent on one job: scoring, lookups, tailoring, form answers. */
+  usageForJob(jobId: number): number {
+    return (this.db.prepare('SELECT COALESCE(SUM(cost), 0) AS cost FROM usage WHERE job_id = ?').get(jobId) as { cost: number }).cost;
+  }
+
+  /** When spending was first recorded, or undefined if never. */
+  usageSince(): string | undefined {
+    return (this.db.prepare('SELECT MIN(at) AS at FROM usage').get() as { at: string | null }).at ?? undefined;
   }
 
   startRun(agent: string, now: string): number {

@@ -113,6 +113,36 @@ describe('runScout', () => {
     assert.equal(health.find((h) => h.source_key === 'greenhouse:acme')?.last_job_count, 4);
   });
 
+  it('skips listings of jobs you already applied to before scoring them, and clears them from the shortlist', async () => {
+    await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
+    const [first] = store.listByStatus(['shortlisted']);
+    store.setStatus(first!.id, 'submitted', 'you applied yourself', 'user', clock.toISOString());
+    // Shortlisted before you applied: the same job from another alert feed.
+    const { id: earlier } = store.upsert(emailJob('77', 'Great Automation Engineer', { externalId: 'drushim:77', location: 'תל אביב' }), clock.toISOString());
+    store.setStatus(earlier, 'shortlisted', null, 'scout', clock.toISOString());
+    scorer.calls = [];
+
+    clock = new Date('2026-10-16T08:00:00Z');
+    const stats = await runScout(deps([board('greenhouse:acme', () => [atsJob('1', 'Great Automation Engineer'), atsJob('2', 'Backend Developer')])]));
+    assert.equal(stats.appliedListings, 2);
+    assert.deepEqual(scorer.calls, ['Backend Developer'], 'the applied job is never scored again');
+    assert.deepEqual(store.listByStatus(['shortlisted']), []);
+    assert.equal(store.get(earlier)!.duplicateOf, first!.id);
+  });
+
+  it('skips listings of jobs you dismissed, from any board', async () => {
+    await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
+    const [first] = store.listByStatus(['shortlisted']);
+    store.setStatus(first!.id, 'dismissed', null, 'user', clock.toISOString());
+    scorer.calls = [];
+
+    clock = new Date('2026-10-16T08:00:00Z');
+    const stats = await runScout(deps([board('greenhouse:acme', () => [atsJob('1', 'Great Automation Engineer')])]));
+    assert.equal(stats.appliedListings, 1);
+    assert.deepEqual(scorer.calls, []);
+    assert.deepEqual(store.listByStatus(['shortlisted']), []);
+  });
+
   it('replaces an alert-email job when the full posting shows up later', async () => {
     await runScout(deps([feed(() => [emailJob('900', 'Great Automation Engineer')])]));
     const [fromEmail] = store.listByStatus(['shortlisted']);
@@ -319,6 +349,21 @@ describe('runScout', () => {
     asked.length = 0;
     await runScout(deps([], { checkLinkedIn: null }));
     assert.equal(asked.length, 0);
+  });
+
+  it('does not close jobs a capped (incomplete) board fetch did not reach', async () => {
+    let complete = true;
+    let jobs = [atsJob('1', 'Backend Developer'), atsJob('2', 'Integration Engineer')];
+    const capped: SourceAdapter = { ...board('greenhouse:acme', () => jobs), lastFetchComplete: () => complete };
+    await runScout(deps([capped]));
+    clock = new Date('2026-10-16T08:00:00Z');
+    complete = false;
+    jobs = [atsJob('1', 'Backend Developer')];
+    const stats = await runScout(deps([capped]));
+    assert.equal(stats.closed, 0);
+    complete = true;
+    clock = new Date('2026-10-17T08:00:00Z');
+    assert.equal((await runScout(deps([capped]))).closed, 1, 'a complete fetch still closes what is gone');
   });
 
   it('retries scoring errors up to maxAttempts', async () => {

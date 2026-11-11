@@ -35,7 +35,7 @@ const APPLIED =
 const REJECTED =
   /decided to (?:move forward|proceed|pursue|continue) with other|not (?:to )?(?:move|moving) forward with your|will not be (?:moving|proceeding)|other candidates whose/i;
 /** Display names that are a platform, not the hiring company. */
-const PLATFORM_NAME = /^(linkedin|indeed( apply)?|greenhouse|lever|ashby|workable|comeet|bamboohr|teamtailor|no[- ]?reply|notifications?|careers?|jobs|recruiting|talent( acquisition)?|hr)$/i;
+const PLATFORM_NAME = /^(linkedin|indeed( apply)?|greenhouse|lever|ashby|workable|comeet|workday|smartrecruiters|bamboohr|teamtailor|no[- ]?reply|notifications?|careers?|jobs|recruiting|talent( acquisition)?|hr)$/i;
 
 const clean = (s: string) =>
   s.replace(/&amp;/g, '&').replace(/&#39;|&rsquo;/g, '’').replace(/&quot;/g, '"').replace(/[\s ​-‏]+/g, ' ').trim();

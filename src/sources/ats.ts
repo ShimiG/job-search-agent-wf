@@ -4,6 +4,8 @@ import type { NormalizedJob } from '../types.ts';
 import { htmlToText, tidyText } from '../util/text.ts';
 import { detectWorkplaceType, formatError, joinLocations, toIso, type SourceAdapter } from './common.ts';
 import type { Http } from './http.ts';
+import { smartRecruiters } from './smartrecruiters.ts';
+import { workday } from './workday.ts';
 
 /*
  * Each adapter reads a public, unauthenticated job board endpoint and validates the
@@ -334,5 +336,9 @@ export function createBoardAdapter(board: BoardConfig): SourceAdapter {
       return workable(board);
     case 'comeet':
       return comeet(board);
+    case 'workday':
+      return workday(board);
+    case 'smartrecruiters':
+      return smartRecruiters(board);
   }
 }

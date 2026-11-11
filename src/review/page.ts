@@ -89,6 +89,11 @@ export const PAGE = String.raw`<!doctype html>
   .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--card); transition: left .15s; }
   .switch input:checked { background: var(--accent); }
   .switch input:checked::after { left: 16px; }
+  table.grid.num { font-variant-numeric: tabular-nums; }
+  table.grid.num th:not(:first-child), table.grid.num td:not(:first-child) { text-align: right; white-space: nowrap; padding-right: 8px; }
+  table.grid.num td:first-child { min-width: 8.5em; }
+  .table-wrap { overflow-x: auto; margin: 6px 0 4px; }
+  .big { font-size: 28px; font-weight: 700; margin-right: 6px; }
   .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
   .panel h2 { font-size: 17px; margin: 0 0 4px; }
   .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 12px; }
@@ -367,6 +372,15 @@ export const PAGE = String.raw`<!doctype html>
     });
     return out;
   }
+  function money(d) { return d < 0.01 ? '<$0.01' : '$' + d.toFixed(2); }
+  // What Claude calls for this job have cost so far: scoring, lookup, tailoring, form answers.
+  function spentTag(j) {
+    if (!j.spent) return [];
+    var t = el('span', 'tag', money(j.spent));
+    t.title = 'Claude calls for this job so far: scoring, looking it up, tailoring and form answers';
+    return [t];
+  }
+
   function docTags(j) {
     if (!j.docs) return [];
     var out = docLinks(j.id, j.docs);
@@ -423,6 +437,51 @@ export const PAGE = String.raw`<!doctype html>
     row.appendChild(btn('Cancel', 'small', function () { ui.redoOpen.delete(j.id); render(); }));
     wrap.appendChild(row);
     return wrap;
+  }
+
+  // The cover letter reuses wording from your recent letters: what repeats, and a one-click fresh rewrite.
+  function letterReuseBox(j) {
+    var lr = j.docs.letterReuse, box = el('div');
+    var ul = el('ul', 'flags');
+    lr.messages.forEach(function (m) { ul.appendChild(el('li', null, 'Cover letter: ' + m)); });
+    box.appendChild(ul);
+    var row = el('div', 'row');
+    row.appendChild(btn('Redo with fresh wording', 'small', function () { ui.notes[j.id] = lr.redoNote; ui.redoOpen.add(j.id); render(); }));
+    box.appendChild(row);
+    return box;
+  }
+
+  // Which of the posting's key terms the tailored CV uses word for word, as a keyword-matching ATS sees it.
+  function keywordBox(j) {
+    var kw = j.docs.keywords;
+    var box = keep(el('details'), 'keywords-' + j.id);
+    box.appendChild(el('summary', null, 'ATS keywords: ' + kw.matched + ' of ' + kw.total + ' in the CV word for word' + (kw.requiredTotal ? ' (' + kw.requiredMatched + ' of ' + kw.requiredTotal + ' must-haves)' : '') + ', ' + kw.supported + ' backed by your CV'));
+    var groups = [
+      ['matched', 'In the CV', 'good'],
+      ['left_out', 'Your CV uses these, this version left them out', 'warn'],
+      ['reworded', 'Your CV shows these in other words', 'warn'],
+      ['missing', 'Not in your CV (never added)', 'bad']
+    ];
+    groups.forEach(function (g) {
+      var items = kw.items.filter(function (i) { return i.status === g[0]; });
+      if (!items.length) return;
+      box.appendChild(el('p', 'note', g[1] + ':'));
+      var tags = el('div', 'tags');
+      items.forEach(function (i) {
+        var t = el('span', 'tag ' + g[2], i.term + (i.required ? '' : ' (nice to have)'));
+        if (i.evidence) t.title = 'Your CV: ' + i.evidence;
+        tags.appendChild(t);
+      });
+      box.appendChild(tags);
+    });
+    if (kw.redoNote) {
+      var row = el('div', 'row');
+      row.appendChild(btn('Redo using the terms your CV backs up', 'small', function () {
+        ui.notes[j.id] = kw.redoNote; ui.redoOpen.add(j.id); render();
+      }));
+      box.appendChild(row);
+    }
+    return box;
   }
 
   // A link to the company's own page for the job. What it does depends on where the job is:
@@ -607,7 +666,9 @@ export const PAGE = String.raw`<!doctype html>
           extra.push(ul);
         }
         if (j.docs && j.docs.feedback) extra.push(el('p', 'note', 'Your note for this version: ' + j.docs.feedback));
+        if (j.docs && j.docs.letterReuse) extra.push(letterReuseBox(j));
         var after = [];
+        if (j.docs && j.docs.keywords) after.push(keywordBox(j));
         if (j.docs && j.docs.report) {
           var rep = keep(el('details'), 'report-' + j.id);
           rep.appendChild(el('summary', null, 'Tailoring report: what was emphasized, gaps, warnings'));
@@ -625,7 +686,19 @@ export const PAGE = String.raw`<!doctype html>
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
-        root.appendChild(jobCard(j, { select: ui.approve, tags: tags, extra: extra, after: after, summary: false }));
+        if (j.docs && j.docs.letterReuse) {
+          var lr = j.docs.letterReuse;
+          tags.push(el('span', 'tag ' + (lr.sameCompany ? 'bad' : 'warn'), lr.sameCompany ? 'Letter repeats one to ' + j.company : 'Letter repeats earlier ones'));
+        }
+        if (j.docs && j.docs.keywords) {
+          var kw = j.docs.keywords;
+          // Green only when most terms and at least half the must-haves are there word for word.
+          var strong = kw.matched / kw.total >= 0.6 && (!kw.requiredTotal || kw.requiredMatched / kw.requiredTotal >= 0.5);
+          var t = el('span', 'tag ' + (strong ? 'good' : 'warn'), 'Keywords ' + kw.matched + '/' + kw.total);
+          t.title = kw.matched + " of the posting's " + kw.total + ' key terms appear in this CV word for word';
+          tags.push(t);
+        }
+        root.appendChild(jobCard(j, { select: ui.approve, tags: tags.concat(spentTag(j)), extra: extra, after: after, summary: false }));
       });
     } else if (ui.tab === 'sending') {
       list = d.sending; renderToolbar(list, null);
@@ -663,7 +736,10 @@ export const PAGE = String.raw`<!doctype html>
             }));
           }
           r.appendChild(btn('I applied myself', 'small', function () {
-            post('markApplied', { id: j.id }).then(function () { toast('Recorded #' + j.id + ' as applied.'); }, fail);
+            post('markApplied', { id: j.id }).then(function (res) {
+              var more = res && res.otherListings ? ' ' + res.otherListings + ' other listing' + (res.otherListings === 1 ? '' : 's') + ' of it removed.' : '';
+              toast('Recorded #' + j.id + ' as applied.' + more);
+            }, fail);
           }));
           extra.push(r);
           extra.push(linkBox(j, 'sending'));
@@ -776,6 +852,18 @@ export const PAGE = String.raw`<!doctype html>
     ch.appendChild(table);
     root.appendChild(ch);
 
+    // The same applications by where Scout found them and by the score it gave them.
+    var b = a.breakdown;
+    if (b) {
+      [['By source', 'Where Scout found the job', b.bySource], ['By score', 'The score Scout gave the job', b.byScore]].forEach(function (x) {
+        var p = el('div', 'panel'); p.appendChild(el('h2', null, x[0]));
+        p.appendChild(callbackTable(x[1], x[2]));
+        root.appendChild(p);
+      });
+      var last = root.lastChild;
+      last.appendChild(el('p', 'note', 'A callback is an assessment, an interview or an offer, rejected afterwards or not. The rate leaves out applications from the last ' + b.waitingDays + ' days, which show as Waiting: too early to count against a source.'));
+    }
+
     // Applications sent per week, the last 10 weeks (weeks start on Sunday).
     var weeks = [], start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - start.getDay());
     for (var i = 9; i >= 0; i--) { var w = new Date(start); w.setDate(w.getDate() - 7 * i); weeks.push(w); }
@@ -787,6 +875,37 @@ export const PAGE = String.raw`<!doctype html>
     wk.appendChild(el('h2', null, 'Applications per week'));
     wk.appendChild(bars(perWeek));
     root.appendChild(wk);
+    root.appendChild(spendingPanel(a.spending));
+  }
+
+  function rate(x) { return x === null ? '–' : pct(x); }
+  function numTable(headers, rows) {
+    var wrap = el('div', 'table-wrap'), t = el('table', 'grid num'), head = el('tr');
+    headers.forEach(function (h) { var th = el('th', null, h); th.scope = 'col'; head.appendChild(th); });
+    t.appendChild(head);
+    rows.forEach(function (r) { var tr = el('tr'); r.forEach(function (v) { tr.appendChild(el('td', null, String(v))); }); t.appendChild(tr); });
+    wrap.appendChild(t); return wrap;
+  }
+  function callbackTable(title, groups) {
+    return numTable([title, 'Applied', 'Callbacks', 'Rate', 'Rejected', 'No reply', 'Waiting'], groups.map(function (g) {
+      return [g.label, g.applied, g.callbacks, rate(g.rate), g.rejected, g.noReply, g.waiting];
+    }));
+  }
+  // What Claude calls have cost: scoring, lookups, tailoring, form answers. A local model costs nothing.
+  function spendingPanel(s) {
+    var p = el('div', 'panel'); p.appendChild(el('h2', null, 'What it costs'));
+    if (!s || !s.since) { p.appendChild(el('p', 'note', 'Nothing recorded yet. Costs of Claude calls are recorded from the next run on.')); return p; }
+    var line = el('p'); line.appendChild(el('span', 'big', money(s.last30Days))); line.appendChild(document.createTextNode('in the last 30 days'));
+    p.appendChild(line);
+    var parts = [money(s.total) + ' since ' + s.since.slice(0, 10)];
+    if (s.perApplication !== null) parts.push('about ' + money(s.perApplication) + ' per application sent (' + s.applications + ')');
+    if (s.perCallback !== null) parts.push(money(s.perCallback) + ' per callback (' + s.callbacks + ')');
+    p.appendChild(el('p', 'note', parts.join(', ') + '.'));
+    if (s.byPurpose.length) {
+      p.appendChild(numTable(['Last 30 days', 'Calls', 'Cost'], s.byPurpose.map(function (x) { return [x.label.charAt(0).toUpperCase() + x.label.slice(1), x.calls, money(x.cost)]; })));
+    }
+    p.appendChild(el('p', 'note', 'Only Claude is counted: scoring with a local model and the Archiver cost nothing. Per application and per callback include everything, such as scoring jobs you skipped. Estimated from token counts at list prices; your Anthropic console has the exact bill.'));
+    return p;
   }
 
   /*

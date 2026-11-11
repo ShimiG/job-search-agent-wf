@@ -2,6 +2,8 @@ import { sleep } from '../util/limiter.ts';
 
 export interface Http {
   getJson(url: string): Promise<unknown>;
+  /** For the few public APIs that list jobs with a POST (Workday). */
+  postJson?(url: string, body: unknown): Promise<unknown>;
 }
 
 export class HttpError extends Error {
@@ -38,14 +40,28 @@ export class FetchHttp implements Http {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
-  async getJson(url: string): Promise<unknown> {
+  getJson(url: string): Promise<unknown> {
+    return this.request(url);
+  }
+
+  postJson(url: string, body: unknown): Promise<unknown> {
+    return this.request(url, body);
+  }
+
+  private async request(url: string, body?: unknown): Promise<unknown> {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       if (attempt > 0) await sleep(this.backoff(attempt, lastError));
       let res: Response;
       try {
         res = await this.fetchImpl(url, {
-          headers: { Accept: 'application/json', 'User-Agent': this.userAgent },
+          method: body === undefined ? 'GET' : 'POST',
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': this.userAgent,
+            ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: AbortSignal.timeout(this.timeoutMs),
         });
       } catch (err) {

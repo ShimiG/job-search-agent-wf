@@ -77,7 +77,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 |---|---|
 | `data/master-cv.json` | Your CV as structured data, blank until you upload one via **Your CV** on the review page. Every highlight has an `id`: the Tailor cites these to prove each claim in a tailored CV comes from you. |
 | `config/preferences.json` | Target roles, title keywords, seniority, locations (`allowOnsite`, remote rules), languages, score cutoffs, web lookups. |
-| `config/sources.json` | Job boards, and alert-email reading (`emailAlerts`). |
+| `config/sources.json` | Job boards, and inbox reading (`emailAlerts`): alert emails, application confirmations and replies. |
 | `config/tailor.json` | Your email and phone for the CV header, languages, length limits, cover-letter style. |
 | `config/submit.json` | Submitter settings and your answer bank for screening questions. |
 | `.env` | API key and optional settings below. |
@@ -107,6 +107,8 @@ npm run scout -- add-source https://jobs.lever.co/somecompany
 npm run scout -- add-source https://jobs.ashbyhq.com/somecompany
 npm run scout -- add-source https://apply.workable.com/somecompany --company "Some Company"
 npm run scout -- add-source https://www.comeet.com/jobs/somecompany/AB.C12 --token <token>
+npm run scout -- add-source https://somecompany.wd5.myworkdayjobs.com/en-US/SomeCareers
+npm run scout -- add-source https://careers.smartrecruiters.com/SomeCompany
 npm run scout -- sources     # what's configured and whether each board worked last time
 ```
 
@@ -115,6 +117,19 @@ page source and search for `token`. A board that returns 404 almost always has t
 `sources` shows it as FAILING. To pause a board, set `"enabled": false` in `config/sources.json`.
 
 Board jobs have full descriptions, and a job that disappears from its board is closed automatically.
+
+**Workday and SmartRecruiters** (many large employers) list jobs without descriptions, so each posting
+costs one more request, and big employers list thousands. Each board reads at most `maxJobs` postings
+per run (200 by default). For a big one, add `search` terms in `config/sources.json`, which use the
+site's own search box:
+
+```json
+{ "ats": "workday", "host": "nvidia.wd5.myworkdayjobs.com", "tenant": "nvidia", "site": "NVIDIAExternalCareerSite",
+  "company": "NVIDIA", "search": ["automation", "solutions engineer"], "maxJobs": 200, "enabled": true }
+```
+
+A run that hits the cap doesn't close the jobs it didn't reach. Workday needs an account per company to
+apply, so the Submitter hands Workday jobs to you; SmartRecruiters forms are filled like any other.
 
 ### LinkedIn, Indeed and Israeli job board alert emails
 
@@ -160,14 +175,43 @@ Alert emails only say the title, company and location, so these jobs are **parti
 
 Scout reads application confirmation emails (LinkedIn's "your application was sent to…", Indeed's
 "Indeed Application:", and the usual "Thank you for applying" emails from company sites and ATSs) and
-marks those jobs as applied. They never come back on your shortlist, a later posting of the same job is
-caught as a duplicate, and they count towards the Submitter's per-company limit. Turn it off with
+marks those jobs as applied. They count towards the Submitter's per-company limit. Turn it off with
 `"trackApplications": false` in `config/sources.json`.
+
+**Applied or dismissed, never shown again.** Every Scout run checks everything you've applied to (from
+those emails, from the Submitter, or **I applied myself**) and everything you've dismissed, before
+filtering or scoring anything, and removes every other listing of the same job: a re-post, the same job
+on another board, or the same job in another alert feed (LinkedIn vs. Drushim vs. AllJobs), including any
+already on your shortlist. Picking, dismissing or marking a job applied clears its other listings right
+away. It's the same job when it has the same job page address (tracking parameters ignored) or the same
+company and title (same level: "Senior" and "Junior" don't match). Two listings from one board in
+different cities count as separate openings. Jobs the Tailor or Submitter are already working on are
+protected the same way, so nothing is applied to twice. Removed listings are kept as duplicates of the
+job they repeat, with the reason, and cost nothing to score. The run summary shows how many were
+skipped. Picking a dismissed job again (`npm run scout -- pick <id>`) brings it back.
 
 The Archiver covers the rest: any reply it reads about an application nothing has recorded (a
 confirmation worded some other way, a rejection, an assessment, an interview, an offer) records that
 application from the email, so applications you sent yourself count in the stats like the ones sent
 here. See [Archiver](#archiver).
+
+### Which applications get callbacks, and what it costs
+
+The Archiver's replies also show which sources and scores pay off. The **Stats** tab (and
+`npm run scout -- results`) breaks your applications down by where Scout found the job (LinkedIn alerts,
+Drushim, a company's board…) and by the score it gave it, with a callback rate for each. A callback is
+an assessment, an interview or an offer, and one followed by a rejection still counts. Applications from
+the last 14 days show as waiting and are left out of the rate. Use it to tune your score cutoff and drop
+sources that never answer.
+
+**What it costs.** Every Claude call is recorded with its token counts and priced at list rates for the
+model that ran it: scoring (the advisor's part at the advisor's rate), web lookups, tailoring,
+fact-checking, form answers, pasted links and CV uploads. A local model costs nothing and isn't counted,
+nor is the Archiver. Each run's summary ends with its cost; the Stats tab and `npm run scout -- results`
+show the last 30 days by purpose, the total, and the all-in cost per application sent and per callback
+(scoring jobs you skipped is part of what an application costs). Cards in Ready to send show what that
+job has cost so far. Figures are estimates from token counts; your Anthropic console has the exact
+bill. Prices live in `src/llm/cost.ts`: a model that isn't listed there is priced as Sonnet 5.5.
 
 ## The review page
 
@@ -179,11 +223,11 @@ npm run review               # http://127.0.0.1:4100
 |---|---|
 | **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. |
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
-| **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
+| **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Applied** | Every application in play, sent by the Submitter or by you: its stage (read from your email by the Archiver, or set by you), replies, things you're asked to do, its CV and cover letter, and every answer Claude wrote on the form. **Check email now** runs the Archiver. An application moves to **Settings → Archive** 30 days after you applied (whatever its stage), when you set its stage to Rejected yourself, or with **Send to archive**. A rejection read from email alone doesn't move it. |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
-| **Stats** | How your applications are doing: replies, interviews, applications per week, and how many were sent with this tool and how many by you. |
+| **Stats** | How your applications are doing: replies, interviews, applications per week, how many were sent with this tool and how many by you, callback rates by source and by score, and what Claude has cost. |
 | **Settings** | The shortlist's minimum score, **Review before sending**, your CV and certificates, and the **Archive**: applications moved out of Applied (**Back to Applied** returns one, even one older than 30 days), and picked jobs never sent. |
 
 **Remove** on any card (Shortlist, Below cutoff, Tailoring, Sending; it's **Reject** in Ready to send)
@@ -427,6 +471,20 @@ and that email is read on the next run. **Check email now** on the Applications 
    rendered again until it fits: fewer skills, one project, fewer bullets for older roles, a two-sentence
    summary, fewer bullets for the current role, smaller type, and only then no project. Nothing is
    reworded; the report says what was trimmed. Versions you edit by hand are never trimmed.
+6. **ATS keywords.** Many employers screen with an ATS that matches the posting's exact words. The draft
+   also lists the posting's key terms (8–20), and each is checked against the final CV text: **in the
+   CV** word for word, **left out** (your CV uses the term, this version doesn't), **in other words**
+   (your CV shows it with different wording), or **not in your CV**. Terms the posting doesn't actually
+   contain are dropped. Ready to send shows the count ("Keywords 9/14") and the lists, and
+   **Redo using the terms your CV backs up** fills in a note for the Tailor. Terms your CV doesn't show
+   are never added: the fact-check still applies.
+7. **Repeated letters.** Recruiters and AI-screening tools spot mass-produced letters by their repeated
+   prose: the same opening, the same closing line, a paragraph with only the company name swapped. Each
+   new letter is compared with your letters to other jobs from the last 90 days (locally, no cost).
+   Wording copied from your CV doesn't count, since restating your facts is expected. When 30% of the
+   letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
+   offers **Redo with fresh wording**. A repeat of a letter to the same company is marked in red: the
+   same people may read both. Redoing the same job never counts as a repeat.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.
@@ -440,8 +498,11 @@ company-site forms, including iframes and forms behind an "Apply" button. Answer
 the tailored PDFs; your **answer bank** in `config/submit.json` (an empty answer means "always ask
 me"); policies (demographic questions declined; consent boxes only with `consentToPrivacyPolicies`);
 your profile (name, email, phone, city, links); and finally the model, which may copy facts from your CV
-and draft short answers like "Why us?". Autocomplete fields (city, country) are filled by picking from
-their suggestions, and the form can't be submitted while it's being filled.
+and draft short answers like "Why us?". A model answer is used only if it fits the form: a choice must
+be one of the field's options and text must fit its length limit. One that doesn't is sent back once,
+with the reason, for a second try; if that fails too, the field is left for you. Autocomplete fields
+(city, country) are filled by picking from their suggestions, and the form can't be submitted while
+it's being filled.
 
 **Security codes:** when a site (Greenhouse, typically) emails a code after you click Submit, the
 Submitter reads it from your inbox, enters it and submits again.

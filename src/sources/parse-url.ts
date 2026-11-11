@@ -12,6 +12,8 @@ export type DetectedBoard =
  *   https://jobs.ashbyhq.com/acme
  *   https://apply.workable.com/acme/
  *   https://www.comeet.com/jobs/acme/A1.B2C   (also needs the API token)
+ *   https://acme.wd5.myworkdayjobs.com/en-US/AcmeCareers
+ *   https://careers.smartrecruiters.com/Acme   (or jobs.smartrecruiters.com/Acme/123-title)
  */
 export function detectBoard(input: string, opts: { company?: string; token?: string } = {}): DetectedBoard {
   let url: URL;
@@ -68,8 +70,24 @@ export function detectBoard(input: string, opts: { company?: string; token?: str
     return { ok: true, board: { ...partial, token: opts.token } };
   }
 
+  const wd = /^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/.exec(host);
+  if (wd) {
+    const tenant = wd[1]!;
+    // /wday/cxs/<tenant>/<site>/…, or /[<locale>/]<site>[/job/…]
+    const site =
+      first === 'wday' ? segments[3] : /^[a-z]{2}(-[A-Za-z]{2})?$/.test(first ?? '') ? segments[1] : first;
+    if (!site || site === 'job') return { ok: false, reason: 'Use the careers site URL (…myworkdayjobs.com/<site>), copied from the address bar' };
+    return { ok: true, board: { ats: 'workday', host, tenant, site, company: company(tenant), search: [], maxJobs: 200, enabled: true } };
+  }
+
+  if (host === 'careers.smartrecruiters.com' || host === 'jobs.smartrecruiters.com' || host === 'api.smartrecruiters.com') {
+    const token = host === 'api.smartrecruiters.com' ? segments[2] : first;
+    if (!token) return { ok: false, reason: 'Expected a URL like careers.smartrecruiters.com/<Company>' };
+    return { ok: true, board: { ats: 'smartrecruiters', token, company: company(token), search: [], maxJobs: 200, enabled: true } };
+  }
+
   return {
     ok: false,
-    reason: `Unrecognized careers site (${host}). Supported: Greenhouse, Lever, Ashby, Workable, Comeet.`,
+    reason: `Unrecognized careers site (${host}). Supported: Greenhouse, Lever, Ashby, Workable, Comeet, Workday, SmartRecruiters.`,
   };
 }
