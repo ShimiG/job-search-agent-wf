@@ -1,5 +1,5 @@
 /** `manual`: a job you added yourself on the review page, from its link (and description, if you pasted one). */
-export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'workday', 'smartrecruiters', 'email', 'manual'] as const;
+export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'workday', 'smartrecruiters', 'remotive', 'jobicy', 'email', 'manual'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 export type WorkplaceType = 'remote' | 'hybrid' | 'onsite' | 'unknown';

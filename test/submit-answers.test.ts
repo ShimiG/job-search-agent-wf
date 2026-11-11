@@ -27,6 +27,9 @@ describe('platforms', () => {
     for (const board of ['https://www.jobmaster.co.il/jobs/checknum.asp?key=1', 'https://www.ziprecruiter.com/ekm/AAA', 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=1']) {
       assert.ok(detectPlatform(board).manualOnly, board);
     }
+    // A remote-job board has no form: the reason is one the review page offers "Find the company's application page" for.
+    assert.match(detectPlatform('https://remotive.com/remote-jobs/software-dev/x-1').manualOnly!, /no application form/);
+    assert.match(detectPlatform('https://jobicy.com/jobs/1-x').manualOnly!, /no application form/);
     assert.equal(detectPlatform('https://job-boards.greenhouse.io/acme/jobs/1').name, 'Greenhouse');
     assert.equal(detectPlatform('https://acme.com/careers?comeet_pos=F6.A12').name, 'Comeet');
     assert.equal(resolveApplyUrl({ source: 'lever', url: 'https://jobs.lever.co/beta/abc', applyUrl: undefined }), 'https://jobs.lever.co/beta/abc/apply');

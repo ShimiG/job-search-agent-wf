@@ -123,6 +123,29 @@ export const BoardSchema = z.discriminatedUnion('ats', [
     ...boardBase,
   }),
   z.object({
+    ats: z.literal('remotive'),
+    /** Shown in lists. Each job carries its own employer. */
+    company: z.string().default('Remotive'),
+    /** One category slug, e.g. "software-dev" (remotive.com/api/remote-jobs/categories). Empty = all. */
+    category: z.string().default(''),
+    /** Words to search titles and descriptions for. Empty = everything. */
+    search: z.string().default(''),
+    enabled: z.boolean().default(true),
+  }),
+  z.object({
+    ats: z.literal('jobicy'),
+    company: z.string().default('Jobicy'),
+    /** Region slugs, e.g. ["anywhere", "emea"] (jobicy.com/api/jobs?get=locations). Empty = every region. */
+    geo: z.array(z.string().min(1)).default([]),
+    /** One category slug, e.g. "engineering". Empty = all. */
+    industry: z.string().default(''),
+    /** One keyword, 3-50 characters. Empty = none. */
+    tag: z.string().default(''),
+    /** Cap on postings read per run (the feed covers the last 7 days). */
+    maxJobs: z.number().int().min(1).max(5000).default(600),
+    enabled: z.boolean().default(true),
+  }),
+  z.object({
     ats: z.literal('smartrecruiters'),
     /** The company identifier from careers.smartrecruiters.com/<Identifier>. */
     token: z.string().min(1),

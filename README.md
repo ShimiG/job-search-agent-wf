@@ -147,6 +147,29 @@ site's own search box:
 A run that hits the cap doesn't close the jobs it didn't reach. Workday needs an account per company to
 apply, so the Submitter hands Workday jobs to you; SmartRecruiters forms are filled like any other.
 
+### Public remote-job boards
+
+Two boards publish their listings through a free, documented API for others to reuse, with jobs from
+many employers, all remote:
+
+```bash
+npm run scout -- add-source https://remotive.com
+npm run scout -- add-source https://jobicy.com
+```
+
+| Board | What Scout reads | The board's conditions, which Scout keeps to |
+|---|---|---|
+| [Remotive](https://github.com/remotive-com/remote-jobs-api) | Every active job, in one request (listings are 24 hours behind the site) | Link back to the Remotive page and name Remotive as the source; at most 4 fetches a day |
+| [Jobicy](https://github.com/Jobicy/remote-jobs-api) | The last 7 days, page by page | Keep Jobicy as the source and its own job link; no new pass more often than once an hour |
+
+Every job keeps the board's link and shows the board as its source. A run that comes too soon after the
+last fetch (6 hours for Remotive, 1 for Jobicy) skips the board and says so. A remote job's location is
+where the candidate may live ("Worldwide", "Europe", "USA Only"): `locations.remoteExclude` in
+`config/preferences.json` drops the ones that rule you out. To narrow what is read, edit the entry in
+`config/sources.json`: Remotive takes one `category` and one `search`; Jobicy takes `geo` regions, one
+`industry`, one `tag` and a `maxJobs` cap. Neither board has an application form: the Submitter hands
+these to you, with **Find the company's application page**.
+
 ### LinkedIn, Indeed and Israeli job board alert emails
 
 LinkedIn and Indeed forbid automated access, but they email you alerts, and Scout reads those:

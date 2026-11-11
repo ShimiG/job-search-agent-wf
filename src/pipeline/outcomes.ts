@@ -69,6 +69,8 @@ const SOURCE_NAMES: Record<string, string> = {
   jobmaster: 'JobMaster alerts',
   ziprecruiter: 'ZipRecruiter alerts',
   'greenhouse-alerts': 'Greenhouse alerts',
+  remotive: 'Remotive',
+  jobicy: 'Jobicy',
   applied: 'Not found by Scout',
   greenhouse: 'Greenhouse boards',
   lever: 'Lever boards',

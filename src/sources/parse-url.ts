@@ -14,6 +14,7 @@ export type DetectedBoard =
  *   https://www.comeet.com/jobs/acme/A1.B2C   (also needs the API token)
  *   https://acme.wd5.myworkdayjobs.com/en-US/AcmeCareers
  *   https://careers.smartrecruiters.com/Acme   (or jobs.smartrecruiters.com/Acme/123-title)
+ *   https://remotive.com, https://jobicy.com   (public remote-job boards, every employer on them)
  */
 export function detectBoard(input: string, opts: { company?: string; token?: string } = {}): DetectedBoard {
   let url: URL;
@@ -86,8 +87,12 @@ export function detectBoard(input: string, opts: { company?: string; token?: str
     return { ok: true, board: { ats: 'smartrecruiters', token, company: company(token), search: [], maxJobs: 200, enabled: true } };
   }
 
+  // Public remote-job boards: one source for the whole board, filtered in config/sources.json.
+  if (host === 'remotive.com') return { ok: true, board: { ats: 'remotive', company: 'Remotive', category: '', search: '', enabled: true } };
+  if (host === 'jobicy.com') return { ok: true, board: { ats: 'jobicy', company: 'Jobicy', geo: [], industry: '', tag: '', maxJobs: 600, enabled: true } };
+
   return {
     ok: false,
-    reason: `Unrecognized careers site (${host}). Supported: Greenhouse, Lever, Ashby, Workable, Comeet, Workday, SmartRecruiters.`,
+    reason: `Unrecognized careers site (${host}). Supported: Greenhouse, Lever, Ashby, Workable, Comeet, Workday, SmartRecruiters, and the remote-job boards Remotive and Jobicy.`,
   };
 }

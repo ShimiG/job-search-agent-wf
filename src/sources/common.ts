@@ -15,6 +15,11 @@ export interface SourceAdapter {
    * nothing and none are closed. Omitted = every successful fetch is complete.
    */
   lastFetchComplete?(): boolean;
+  /**
+   * A board's own limit on how often its feed may be read ("at most 4 times a day"). A run that
+   * comes sooner than this after the last successful fetch leaves the board alone.
+   */
+  readonly minHoursBetweenFetches?: number;
   fetchJobs(http: Http): Promise<NormalizedJob[]>;
 }
 
