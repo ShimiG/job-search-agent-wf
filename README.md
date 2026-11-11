@@ -101,6 +101,8 @@ npm run scout -- add-source https://jobs.lever.co/somecompany
 npm run scout -- add-source https://jobs.ashbyhq.com/somecompany
 npm run scout -- add-source https://apply.workable.com/somecompany --company "Some Company"
 npm run scout -- add-source https://www.comeet.com/jobs/somecompany/AB.C12 --token <token>
+npm run scout -- add-source https://somecompany.wd5.myworkdayjobs.com/en-US/SomeCareers
+npm run scout -- add-source https://careers.smartrecruiters.com/SomeCompany
 npm run scout -- sources     # what's configured and whether each board worked last time
 ```
 
@@ -109,6 +111,19 @@ page source and search for `token`. A board that returns 404 almost always has t
 `sources` shows it as FAILING. To pause a board, set `"enabled": false` in `config/sources.json`.
 
 Board jobs have full descriptions, and a job that disappears from its board is closed automatically.
+
+**Workday and SmartRecruiters** (many large employers) list jobs without descriptions, so each posting
+costs one more request, and big employers list thousands. Each board reads at most `maxJobs` postings
+per run (200 by default). For a big one, add `search` terms in `config/sources.json`, which use the
+site's own search box:
+
+```json
+{ "ats": "workday", "host": "nvidia.wd5.myworkdayjobs.com", "tenant": "nvidia", "site": "NVIDIAExternalCareerSite",
+  "company": "NVIDIA", "search": ["automation", "solutions engineer"], "maxJobs": 200, "enabled": true }
+```
+
+A run that hits the cap doesn't close the jobs it didn't reach. Workday needs an account per company to
+apply, so the Submitter hands Workday jobs to you; SmartRecruiters forms are filled like any other.
 
 ### LinkedIn, Indeed and Israeli job board alert emails
 
@@ -180,6 +195,14 @@ an interview followed by a rejection still counts. Applications from the last 14
 waiting and left out of the rate. Use it to tune your score cutoffs and drop sources that never answer.
 Turn it off with `"trackReplies": false`; `repliesSinceDays` (default 90) sets how far back to read.
 
+**What it costs.** Every Claude call is recorded with its token counts and priced at list rates for the
+model that ran it: scoring, web lookups, tailoring, fact-checking, form answers, pasted links and CV
+uploads. Each run's summary ends with its cost; the Results tab and `npm run scout -- results` show the
+last 30 days by purpose, the total, and the all-in cost per application sent and per callback (scoring
+jobs you skipped is part of what an application costs). Cards in Ready to send and Sent show what that
+job has cost so far. Figures are estimates from token counts; your Anthropic console has the exact
+bill. Prices live in `src/llm/cost.ts`: a model that isn't listed there is priced as Sonnet 5.5.
+
 ## The review page
 
 ```bash
@@ -193,7 +216,7 @@ npm run review               # http://127.0.0.1:4100
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Sent** | The last 14 days, with every answer Claude wrote on each form. |
-| **Results** | Your callback rate, by source, score band and how you applied, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
+| **Results** | Your callback rate, by source, score band and how you applied, what the search has cost, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
 
 **Paste a link** to the company's own page for a job (from LinkedIn's Apply button, a careers site…).
@@ -342,6 +365,13 @@ model to ignore instructions inside them. After changing preferences or your CV,
    contain are dropped. Ready to send shows the count ("Keywords 9/14") and the lists, and
    **Redo using the terms your CV backs up** fills in a note for the Tailor. Terms your CV doesn't show
    are never added: the fact-check still applies.
+7. **Repeated letters.** Recruiters and AI-screening tools spot mass-produced letters by their repeated
+   prose: the same opening, the same closing line, a paragraph with only the company name swapped. Each
+   new letter is compared with your letters to other jobs from the last 90 days (locally, no cost).
+   Wording copied from your CV doesn't count, since restating your facts is expected. When 30% of the
+   letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
+   offers **Redo with fresh wording**. A repeat of a letter to the same company is marked in red: the
+   same people may read both. Redoing the same job never counts as a repeat.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.

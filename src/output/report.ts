@@ -1,3 +1,4 @@
+import { formatDollars, PURPOSE_LABELS, type UsagePurpose } from '../llm/cost.ts';
 import type { RunStats } from '../pipeline/run.ts';
 import type { JobRow } from '../types.ts';
 
@@ -94,6 +95,10 @@ export function formatRunStats(stats: RunStats): string {
   if (stats.oldAlerts) lines.push(`Old alerts: ${stats.oldAlerts} LinkedIn job(s) dropped, posted long ago (estimated from job IDs)`);
   if (stats.enrich?.tried) {
     lines.push(`Looked up: ${stats.enrich.tried} shortlisted alert job(s) on the web, ${stats.enrich.found} full posting(s) found (about $${stats.enrich.cost.toFixed(2)})`);
+  }
+  if (stats.cost?.total) {
+    const parts = Object.entries(stats.cost.byPurpose).map(([purpose, d]) => `${PURPOSE_LABELS[purpose as UsagePurpose] ?? purpose} ${formatDollars(d)}`);
+    lines.push(`Cost: about ${formatDollars(stats.cost.total)} this run${parts.length > 1 ? ` (${parts.join(', ')})` : ''}`);
   }
   if (stats.scoringBacklog > 0) lines.push(`Backlog: ${stats.scoringBacklog} still waiting for a score (raise scoring.maxJobsPerRun or run again)`);
   for (const e of stats.sources.errors) lines.push(`  ✗ ${e.source}: ${e.error}`);

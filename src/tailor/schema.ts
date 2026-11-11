@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { KeywordCoverage } from './keywords.ts';
+import type { LetterSimilarity } from './similarity.ts';
 
 export const SUPPORTED_LANGUAGES = ['en', 'he', 'ru'] as const;
 export type OutputLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -148,4 +149,6 @@ export interface VerificationReport {
   cvPages?: number;
   /** Which of the posting's key terms the CV uses word for word, as a keyword-matching ATS would see it. */
   keywords?: KeywordCoverage;
+  /** How much of the cover letter's wording repeats your recent letters to other jobs. */
+  letterSimilarity?: LetterSimilarity;
 }

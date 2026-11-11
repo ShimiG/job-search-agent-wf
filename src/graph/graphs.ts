@@ -21,6 +21,7 @@ import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
 import { AnthropicEnricher } from '../llm/enrich.ts';
 import { AnthropicScorer } from '../llm/scorer.ts';
 import { runScout, type RunStats } from '../pipeline/run.ts';
+import { CostMeter } from '../llm/cost.ts';
 import { applicationMailSource } from '../sources/applications.ts';
 import { createBoardAdapter } from '../sources/ats.ts';
 import type { SourceAdapter } from '../sources/common.ts';
@@ -80,16 +81,17 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
   const logger = createLogger();
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   let scorer: AnthropicScorer | undefined;
+  const meter = new CostMeter('scout');
   if (!noScore) {
     if (!cvStatus().ready) throw new ConfigError(UPLOAD_CV_FIRST);
     if (!process.env.ANTHROPIC_API_KEY) {
       throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env, or run with noScore: true to skip scoring.');
     }
-    scorer = new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL });
+    scorer = new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL, meter });
   }
   const { applied, replies } = applicationMailSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
-  const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-  return withStore((store) => runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher }));
+  const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
+  return withStore((store) => runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher, meter }));
 }
 
 export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): Promise<TailorRunStats> {
@@ -98,11 +100,12 @@ export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): 
   if (!existsSync(paths.tailor)) throw new ConfigError(`Missing ${paths.tailor}. Run "npm run scout -- init" to create it.`);
   const cfg = loadJsonFile(paths.tailor, TailorConfigSchema);
   const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
-  const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL });
+  const meter = new CostMeter('tailor');
+  const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL, meter });
   const pdf = cfg.pdf.enabled && !noPdf ? await launchPdfEngine(cfg.pdf.browserPath) : null;
   try {
     return await withStore((store) =>
-      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(), model: llm.model }, { jobIds }),
+      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(), model: llm.model, meter }, { jobIds }),
     );
   } finally {
     await pdf?.close();
@@ -120,7 +123,8 @@ export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode
   }
   const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
   const tailor = loadJsonFile(paths.tailor, TailorConfigSchema);
-  const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL }) : null;
+  const meter = new CostMeter('submitter');
+  const mapper = process.env.ANTHROPIC_API_KEY ? new AnthropicFieldMapper({ model: process.env.TAILOR_MODEL, meter }) : null;
   if (!mapper) logger.warn('ANTHROPIC_API_KEY not set: unusual questions will be left for you');
   const imap = imapCredentialsFromEnv();
   const browser = await openBrowser({ browserPath: settings.browserPath, headless: mode !== 'assist', userDataDir: paths.browserProfile });
@@ -133,6 +137,7 @@ export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode
           answers: settings,
           contact: tailor.contact,
           cfg: settings,
+          meter,
           mapper,
           browser,
           logger,

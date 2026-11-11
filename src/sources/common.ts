@@ -10,6 +10,11 @@ export interface SourceAdapter {
    * external-ID prefix that weren't returned can be marked closed.
    */
   readonly snapshotPrefix?: string;
+  /**
+   * False when the last fetch was cut short (a per-run cap on a big board), so missing jobs mean
+   * nothing and none are closed. Omitted = every successful fetch is complete.
+   */
+  lastFetchComplete?(): boolean;
   fetchJobs(http: Http): Promise<NormalizedJob[]>;
 }
 

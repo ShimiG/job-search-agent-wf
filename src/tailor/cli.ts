@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, loadJsonFile, resolvePaths } from '../config.ts';
 import { JobStore } from '../db/store.ts';
+import { CostMeter, formatDollars } from '../llm/cost.ts';
 import { sweepAppliedListings } from '../pipeline/applied.ts';
 import type { JobStatus } from '../types.ts';
 import { createLogger } from '../util/logger.ts';
@@ -76,15 +77,17 @@ async function main() {
       if (!process.env.ANTHROPIC_API_KEY) throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env.');
       const cfg = loadTailorConfig();
       const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
-      const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL });
+      const meter = new CostMeter('tailor');
+      const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL, meter });
       const jobIds = values.job ? values.job.split(',').map((v) => parseId(v)) : undefined;
       const db = store();
       try {
         const stats = await withPdf(cfg.pdf.enabled && !values['no-pdf'], cfg.pdf.browserPath, (pdf) =>
-          runTailor({ store: db, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger, model: llm.model }, { jobIds }),
+          runTailor({ store: db, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger, model: llm.model, meter }, { jobIds }),
         );
         if (stats.attempted) {
           console.log(`\nTailored ${stats.tailored}/${stats.attempted}${stats.needsReview ? `, ${stats.needsReview} need your review` : ''}${stats.errors.length ? `, ${stats.errors.length} failed` : ''}.`);
+          if (stats.cost) console.log(`Cost: about ${formatDollars(stats.cost)}.`);
           console.log('Review with: npm run tailor -- list');
         }
       } finally {

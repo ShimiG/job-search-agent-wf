@@ -334,7 +334,22 @@ describe('runScout', () => {
     assert.equal(store.listByStatus(['shortlisted']).length, 0);
   });
 
-  it('retries scoring errors up to maxAttempts', async () => {
+  it('does not close jobs a capped (incomplete) board fetch did not reach', async () => {
+    let complete = true;
+    let jobs = [atsJob('1', 'Backend Developer'), atsJob('2', 'Integration Engineer')];
+    const capped: SourceAdapter = { ...board('greenhouse:acme', () => jobs), lastFetchComplete: () => complete };
+    await runScout(deps([capped]));
+    clock = new Date('2026-10-16T08:00:00Z');
+    complete = false;
+    jobs = [atsJob('1', 'Backend Developer')];
+    const stats = await runScout(deps([capped]));
+    assert.equal(stats.closed, 0);
+    complete = true;
+    clock = new Date('2026-10-17T08:00:00Z');
+    assert.equal((await runScout(deps([capped]))).closed, 1, 'a complete fetch still closes what is gone');
+  });
+
+    it('retries scoring errors up to maxAttempts', async () => {
     const prefs = makePrefs({ scoring: { threshold: 65, maxJobsPerRun: 10, concurrency: 1, maxAttempts: 2 } });
     const adapter = board('greenhouse:acme', () => [atsJob('1', 'Boom Developer')]);
     const first = await runScout(deps([adapter], { prefs }));

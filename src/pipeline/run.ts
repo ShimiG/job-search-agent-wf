@@ -2,6 +2,7 @@ import type { Preferences } from '../config.ts';
 import type { JobRow } from '../types.ts';
 import type { JobStore } from '../db/store.ts';
 import type { Scorer } from '../llm/scorer.ts';
+import type { CostMeter, UsagePurpose } from '../llm/cost.ts';
 import type { SourceAdapter } from '../sources/common.ts';
 import type { Http } from '../sources/http.ts';
 import type { Logger } from '../util/logger.ts';
@@ -33,6 +34,8 @@ export interface RunDeps {
   /** Re-checks found posting pages. Tests replace it; defaults to a plain HTTP check. */
   checkPage?: (url: string) => Promise<PageCheck>;
   clock?: () => Date;
+  /** The meter the scorer and enricher report to; stored with this run. */
+  meter?: CostMeter;
 }
 
 export interface RunStats {
@@ -61,6 +64,8 @@ export interface RunStats {
   closedPostings: number;
   /** Shortlisted alert jobs looked up on the web, how many full postings were found, and the cost in dollars. */
   enrich: { tried: number; found: number; cost: number };
+  /** Dollars spent on Claude this run, by what it was for (scoring, web lookups). */
+  cost: { total: number; byPurpose: Partial<Record<UsagePurpose, number>> };
   /** Still waiting after this run hit maxJobsPerRun. */
   scoringBacklog: number;
   filterReasons: Record<string, number>;
@@ -73,6 +78,7 @@ function emptyStats(): RunStats {
     evaluated: 0, filteredOut: 0, duplicates: 0, queued: 0,
     scored: 0, shortlisted: 0, lowScore: 0, scoreErrors: 0, scoringBacklog: 0,
     enrich: { tried: 0, found: 0, cost: 0 },
+    cost: { total: 0, byPurpose: {} },
     oldAlerts: 0,
     closedPostings: 0,
     filterReasons: {},
@@ -85,6 +91,7 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
   const iso = () => clock().toISOString();
   const stats = emptyStats();
   const runId = store.startRun('scout', iso());
+  deps.meter?.attach(store, runId);
 
   await collect(deps, stats, iso);
   await markApplied(deps, stats, iso);
@@ -106,6 +113,8 @@ export async function runScout(deps: RunDeps): Promise<RunStats> {
   await dropClosedPostings(deps, stats, iso);
   stats.scoringBacklog = store.countScoringQueue(prefs.scoring.maxAttempts);
 
+  if (deps.meter) stats.cost = deps.meter.totals();
+  deps.meter?.detach();
   store.finishRun(runId, stats, iso());
   return stats;
 }
@@ -126,7 +135,7 @@ async function collect(deps: RunDeps, stats: RunStats, iso: () => string) {
       });
       write();
       stats.fetched += jobs.length;
-      if (adapter.snapshotPrefix) {
+      if (adapter.snapshotPrefix && (adapter.lastFetchComplete?.() ?? true)) {
         stats.closed += store.markMissingAsClosed(adapter.kind, adapter.snapshotPrefix, startedAt, iso());
       }
       store.sourceSucceeded(adapter.key, jobs.length, iso());

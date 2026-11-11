@@ -1,4 +1,4 @@
-export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'email'] as const;
+export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'workday', 'smartrecruiters', 'email'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 export type WorkplaceType = 'remote' | 'hybrid' | 'onsite' | 'unknown';

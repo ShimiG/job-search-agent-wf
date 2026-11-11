@@ -93,6 +93,28 @@ export const BoardSchema = z.discriminatedUnion('ats', [
     token: z.string().min(1),
     ...boardBase,
   }),
+  z.object({
+    ats: z.literal('workday'),
+    /** The careers site host, e.g. "nvidia.wd5.myworkdayjobs.com". */
+    host: z.string().regex(/^[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com$/i, 'expected <tenant>.wd<N>.myworkdayjobs.com'),
+    /** The tenant: the host's first label, e.g. "nvidia". */
+    tenant: z.string().min(1),
+    /** The careers site name from the URL path, e.g. "NVIDIAExternalCareerSite". */
+    site: z.string().min(1),
+    /** Search terms (Workday's own search box). Big employers list thousands of jobs: search instead. */
+    search: z.array(z.string().min(1)).default([]),
+    /** Cap on postings read per run; each one costs a request. */
+    maxJobs: z.number().int().min(1).max(2000).default(200),
+    ...boardBase,
+  }),
+  z.object({
+    ats: z.literal('smartrecruiters'),
+    /** The company identifier from careers.smartrecruiters.com/<Identifier>. */
+    token: z.string().min(1),
+    search: z.array(z.string().min(1)).default([]),
+    maxJobs: z.number().int().min(1).max(2000).default(200),
+    ...boardBase,
+  }),
 ]);
 export type BoardConfig = z.infer<typeof BoardSchema>;
 

@@ -1,3 +1,4 @@
+import { withJob, type CostMeter } from '../llm/cost.ts';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MasterCv } from '../config.ts';
@@ -10,6 +11,7 @@ import type { ClaimVerifier, DraftInput, TailorWriter } from './llm.ts';
 import { documentNames, renderCvHtml, renderLetterHtml, writeText, type PdfEngine } from './render.ts';
 import { SUPPORTED_LANGUAGES, type Issue, type OutputLanguage, type TailorConfig, type TailoredContent, type VerificationReport } from './schema.ts';
 import { formatCoverage, keywordCoverage } from './keywords.ts';
+import { letterSimilarity, similarityMessages, type EarlierLetter } from './similarity.ts';
 import { applyVerdicts, bulletChanges, claimsForReview, factCheck, normalizeDraft, type Claim, type ContentBody } from './verify.ts';
 
 export interface TailorDeps {
@@ -24,6 +26,8 @@ export interface TailorDeps {
   logger: Logger;
   model?: string;
   clock?: () => Date;
+  /** The meter the writer and verifier report to; stored with this run. */
+  meter?: CostMeter;
 }
 
 export function decideLanguages(job: JobRow, cfg: TailorConfig): { cvLanguage: OutputLanguage; letterLanguage: OutputLanguage } {
@@ -103,6 +107,27 @@ export async function produceContent(job: JobRow, deps: TailorDeps): Promise<{ c
     keywords: keywordCoverage(body, cv, postText),
   };
   return { content, report };
+}
+
+/** Letters written in the last 90 days are the ones a pattern could show up across. */
+const EARLIER_LETTERS_DAYS = 90;
+
+/**
+ * Compares the cover letter with your recent letters to other jobs and adds a warning for each repeat.
+ * Local and free: no model call.
+ */
+export function checkLetterReuse(store: JobStore, jobId: number, content: TailoredContent, report: VerificationReport, cv: MasterCv, now: Date): void {
+  const since = new Date(now.getTime() - EARLIER_LETTERS_DAYS * 86_400_000).toISOString();
+  const earlier: EarlierLetter[] = store.recentApplications(jobId, since).flatMap((app) => {
+    const c = app.content as Partial<TailoredContent>;
+    if (!c.coverLetter) return [];
+    return [{ jobId: app.jobId, company: c.company ?? '', title: c.jobTitle ?? '', paragraphs: [...c.coverLetter.paragraphs, c.coverLetter.closing] }];
+  });
+  report.issues = report.issues.filter((i) => i.where !== 'letter-wording');
+  report.letterSimilarity = letterSimilarity(content, earlier, cv);
+  for (const message of similarityMessages(report.letterSimilarity, content.coverLetter.paragraphs.length)) {
+    report.issues.push({ severity: 'warning', where: 'letter-wording', message });
+  }
 }
 
 export function applicationDir(outDir: string, job: Pick<JobRow, 'id' | 'company'>, version: number): string {
@@ -215,6 +240,7 @@ export async function writeArtifacts(
 export async function tailorJob(job: JobRow, deps: TailorDeps): Promise<{ app: ApplicationRecord; report: VerificationReport; files: string[] }> {
   const now = (deps.clock ?? (() => new Date()))();
   const { content, report } = await produceContent(job, deps);
+  checkLetterReuse(deps.store, job.id, content, report, deps.cv, now);
   const version = (deps.store.latestApplication(job.id)?.version ?? 0) + 1;
   const dir = applicationDir(deps.outDir, job, version);
   const written = await writeArtifacts(dir, content, report, deps, now, { fit: true, posting: postingText(job) });
@@ -242,6 +268,8 @@ export interface TailorRunStats {
   tailored: number;
   needsReview: number;
   errors: Array<{ jobId: number; error: string }>;
+  /** Dollars spent on Claude this run, when a meter was given. */
+  cost?: number;
 }
 
 export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = {}): Promise<TailorRunStats> {
@@ -256,11 +284,12 @@ export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = 
   }
 
   const runId = store.startRun('tailor', new Date().toISOString());
+  deps.meter?.attach(store, runId);
   for (const job of jobs) {
     stats.attempted++;
     logger.info(`#${job.id}: tailoring for ${job.company} — ${job.title}`);
     try {
-      const { report, app } = await tailorJob(job, deps);
+      const { report, app } = await withJob(job.id, () => tailorJob(job, deps));
       stats.tailored++;
       if (!report.ok) stats.needsReview++;
       logger.info(`#${job.id}: v${app.version} written to ${app.dir}${report.ok ? '' : ' (needs review)'}`);
@@ -271,6 +300,8 @@ export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = 
       logger.warn(`#${job.id}: tailoring failed: ${message}`);
     }
   }
+  if (deps.meter) stats.cost = deps.meter.totals().total;
+  deps.meter?.detach();
   store.finishRun(runId, stats, new Date().toISOString());
   return stats;
 }
@@ -298,6 +329,7 @@ export async function rerender(jobId: number, deps: Pick<TailorDeps, 'store' | '
     revised: false,
     keywords: keywordCoverage(content, deps.cv, postingText(job)),
   };
+  checkLetterReuse(deps.store, jobId, content, report, deps.cv, today);
   // Your hand edits are kept as written: no trimming to fit.
   const { files } = await writeArtifacts(app.dir, content, report, deps, today);
   deps.store.updateApplicationContent(app.id, content, report);

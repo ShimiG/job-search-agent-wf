@@ -15,18 +15,34 @@ export function jsonFixture(name: string): unknown {
   return JSON.parse(fixture(name));
 }
 
-/** Http stub: maps URL substrings to payloads and records every request. */
-export function fakeHttp(routes: Record<string, unknown>): Http & { calls: string[] } {
+/**
+ * Http stub: maps URL substrings to payloads and records every request. A route's value may be a
+ * function of the POST body (or undefined for a GET), for paged APIs.
+ */
+export function fakeHttp(routes: Record<string, unknown>): Http & { calls: string[]; posts: unknown[] } {
   const calls: string[] = [];
+  const posts: unknown[] = [];
+  const respond = (url: string, body?: unknown) => {
+    calls.push(url);
+    // Longest match first, so ".../jobs" doesn't swallow ".../jobs/123".
+    const hit = Object.keys(routes)
+      .sort((a, b) => b.length - a.length)
+      .find((k) => url.includes(k));
+    if (!hit) throw new Error(`No fake route for ${url}`);
+    const route = routes[hit];
+    const payload = typeof route === 'function' ? (route as (b: unknown, u: string) => unknown)(body, url) : route;
+    if (payload instanceof Error) throw payload;
+    return structuredClone(payload);
+  };
   return {
     calls,
+    posts,
     async getJson(url: string) {
-      calls.push(url);
-      const hit = Object.keys(routes).find((k) => url.includes(k));
-      if (!hit) throw new Error(`No fake route for ${url}`);
-      const payload = routes[hit];
-      if (payload instanceof Error) throw payload;
-      return structuredClone(payload);
+      return respond(url);
+    },
+    async postJson(url: string, body: unknown) {
+      posts.push(body);
+      return respond(url, body);
     },
   };
 }
