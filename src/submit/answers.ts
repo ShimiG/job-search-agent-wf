@@ -1,4 +1,5 @@
 import type { MasterCv } from '../config.ts';
+import { CERTIFICATE_TYPES, type CertificateType } from '../cv/certificates.ts';
 import type { TailorConfig } from '../tailor/schema.ts';
 import type { JobRow } from '../types.ts';
 import { containsKeyword } from '../util/text.ts';
@@ -38,9 +39,22 @@ export function detectPlatform(url: string): Platform {
   return { name: 'company site' };
 }
 
-/** Where the form lives. Lever and Ashby put it on a sub-page; most others embed it in the job page. */
+/**
+ * Where the form lives. Lever and Ashby put it on a sub-page; most others embed it in the job page.
+ * A job you added yourself is recognized by its link's site.
+ */
 export function resolveApplyUrl(job: Pick<JobRow, 'url' | 'applyUrl' | 'source'>): string {
   if (job.applyUrl) return job.applyUrl;
+  if (job.source === 'manual') {
+    const page = URL.parse(job.url);
+    if (!page) return job.url;
+    const sub = /(^|\.)lever\.co$/.test(page.hostname) ? 'apply' : page.hostname === 'jobs.ashbyhq.com' ? 'application' : null;
+    const path = page.pathname.replace(/\/+$/, '');
+    // Only from a single job's page (site/company/job), not a careers list.
+    if (!sub || path.split('/').filter(Boolean).length !== 2) return job.url;
+    page.pathname = `${path}/${sub}`;
+    return page.href;
+  }
   const url = job.url.replace(/\/+$/, '');
   if (job.source === 'lever' && !/\/apply$/.test(url)) return `${url}/apply`;
   if (job.source === 'ashby' && !/\/application$/.test(url)) return `${url}/application`;
@@ -114,11 +128,36 @@ const DECLINE_OPTION = /decline|prefer not|don'?t wish|do not wish|not to (say|a
 const CONSENT = /privacy|consent|agree|terms|gdpr|data processing|acknowledge|מדיניות|הסכמה|מסכים|מסכימה/i;
 const RESUME = /resume|r[ée]sum[ée]|\bcv\b|curriculum|קורות חיים|קו"ח|резюме/i;
 const COVER = /cover\s*letter|motivation letter|מכתב מקדים|сопроводительн/i;
+// An upload that asks for certificates. Not "license" or "diploma": those are usually an ID or a degree.
+const CERTIFICATE = /certific|credential|תעוד|הסמכ|сертификат/i;
 
 export interface Documents {
   cvPdf: string | null;
   letterPdf: string | null;
   letterText: string;
+  /** The certificates you uploaded, in the order you added them. */
+  certificates?: Array<{ file: string; type: CertificateType }>;
+}
+
+/** Whether a file input's accept list ("application/pdf,.png", "image/*") takes this type. No list takes anything. */
+export function acceptsType(accept: string | undefined, type: CertificateType): boolean {
+  if (!accept?.trim()) return true;
+  const mime = CERTIFICATE_TYPES[type].mime;
+  const exts = type === 'jpg' ? ['.jpg', '.jpeg'] : [CERTIFICATE_TYPES[type].ext];
+  return accept
+    .toLowerCase()
+    .split(',')
+    .map((a) => a.trim())
+    .some((a) => exts.includes(a) || a === mime || a === `${mime.split('/')[0]}/*` || a === '*/*');
+}
+
+/**
+ * The certificate files for an upload that asks for them: every one when it takes several files,
+ * otherwise the first you added. Only types the field accepts.
+ */
+export function certificatesFor(f: Pick<FormField, 'accept' | 'multiple'>, certs: NonNullable<Documents['certificates']>): string[] {
+  const allowed = certs.filter((c) => acceptsType(f.accept, c.type));
+  return (f.multiple ? allowed : allowed.slice(0, 1)).map((c) => c.file);
 }
 
 export interface PlanContext {
@@ -158,7 +197,14 @@ export function planDeterministic(fields: FormField[], ctx: PlanContext): Planne
 
     if (f.kind === 'file') {
       if (COVER.test(label)) return answer(f, ctx.documents.letterPdf ?? '', 'document', 'cover letter PDF');
-      if (RESUME.test(label) || /attach/i.test(label) || f.name === 'resume') return answer(f, ctx.documents.cvPdf ?? '', 'document', 'CV PDF');
+      if (RESUME.test(label) || f.name === 'resume') return answer(f, ctx.documents.cvPdf ?? '', 'document', 'CV PDF');
+      // Certificates go only where the form asks for them; a form without such a field never gets them.
+      if (CERTIFICATE.test(label) || CERTIFICATE.test(f.name)) {
+        const files = certificatesFor(f, ctx.documents.certificates ?? []);
+        const detail = files.length ? `${files.length} certificate(s)` : ctx.documents.certificates?.length ? 'no certificate of a type this field accepts' : 'no certificates uploaded';
+        return answer(f, files.join('\n'), 'document', detail);
+      }
+      if (/attach/i.test(label)) return answer(f, ctx.documents.cvPdf ?? '', 'document', 'CV PDF');
       return answer(f, '', 'none', 'policy: unknown file upload');
     }
 

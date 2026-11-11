@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import { looksClosed } from '../pipeline/closed.ts';
+import { detectBoard } from '../sources/parse-url.ts';
 import type { JobRow, WorkplaceType } from '../types.ts';
 import { diceSimilarity, normalizeForMatch, normalizeTitle } from '../util/text.ts';
 import { BLOCKED_DOMAINS, overlap } from './enrich.ts';
@@ -11,7 +12,10 @@ import { BLOCKED_DOMAINS, overlap } from './enrich.ts';
  * The full posting behind a link you paste: a company's application page you reached yourself (from
  * LinkedIn's "Apply" button, a careers site...). The page is opened in Chrome, so pages that build
  * their text in the browser (Comeet, Ashby) work, and Claude copies the job description off it. The
- * copy is accepted only if it's really on the page and the page is about the same job.
+ * copy is accepted only if it's really on the page and, for a job already on a card, about that job.
+ *
+ * A job you add yourself with its description pasted is never fetched: Claude only reads which job it
+ * is (title, company, location) from your text.
  */
 
 export interface PagePosting {
@@ -26,6 +30,12 @@ export interface PagePosting {
 export type LinkResult =
   | { ok: true; posting: PagePosting; finalUrl: string; cost: number }
   | { ok: false; closed?: boolean; reason: string; cost: number };
+
+/** The company named by an ATS link (job-boards.greenhouse.io/acme/... is Acme), for pages that don't say. */
+function companyFromUrl(url: string): string {
+  const board = detectBoard(url);
+  return board.ok ? board.board.company : '';
+}
 
 const Extract = z.object({
   is_job_posting: z.boolean(),
@@ -123,11 +133,14 @@ export function sameTitle(a: string, b: string): boolean {
   return diceSimilarity(x, y) >= 0.6 || x.includes(y) || y.includes(x);
 }
 
-/** Claude copies the posting out of the page text; the copy is checked against the page and the job. */
+/**
+ * Claude copies the posting out of the page text; the copy is checked against the page, and against
+ * the job when there is one (null: a job you're adding from its link).
+ */
 export async function extractPosting(
   pageText: string,
-  job: Pick<JobRow, 'title' | 'company'>,
-  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
+  job: Pick<JobRow, 'title' | 'company'> | null,
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; url?: string; meter?: CostMeter } = {},
 ): Promise<Exclude<LinkResult, { finalUrl: string }> | { ok: true; posting: PagePosting; cost: number }> {
   if (looksClosed(pageText.slice(0, 20_000))) return { ok: false, closed: true, reason: 'the page says this job is no longer accepting applications', cost: 0 };
   if (pageText.length < 200) return { ok: false, reason: 'the page has almost no text (it may need a login)', cost: 0 };
@@ -140,14 +153,16 @@ export async function extractPosting(
     messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
     output_config: { format: zodOutputFormat(Extract), effort: 'low' },
   });
-  const jobId = (job as { id?: unknown }).id;
+  const jobId = (job as { id?: unknown } | null)?.id;
   const cost = opts.meter
     ? opts.meter.record('posting', model, message.usage, typeof jobId === 'number' ? jobId : null)
     : usageCost(model, message.usage);
   const x = message.parsed_output;
   if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the page could not be read', cost };
   if (!x.is_job_posting) return { ok: false, reason: "the page isn't a single job posting (a job list, a login or an error page?)", cost };
-  if (!sameTitle(x.title, job.title)) return { ok: false, reason: `the page is for "${x.title}", not "${job.title}": check the link`, cost };
+  if (job && !sameTitle(x.title, job.title)) return { ok: false, reason: `the page is for "${x.title}", not "${job.title}": check the link`, cost };
+  const company = x.company.trim() || job?.company || companyFromUrl(opts.url ?? '');
+  if (!x.title.trim() || !company) return { ok: false, reason: "the page doesn't say the job's title and company", cost };
   const description = x.description.trim();
   if (description.length < 200) return { ok: false, reason: 'no job description found on the page', cost };
   const share = overlap(description, pageText);
@@ -158,7 +173,7 @@ export async function extractPosting(
     cost,
     posting: {
       title: x.title.trim(),
-      company: x.company.trim() || job.company,
+      company,
       location: x.location.trim() || undefined,
       workplaceType: x.workplace_type,
       postedAt: posted && !Number.isNaN(posted.getTime()) ? posted.toISOString() : undefined,
@@ -169,7 +184,7 @@ export async function extractPosting(
 
 export async function postingFromLink(
   url: string,
-  job: Pick<JobRow, 'title' | 'company'>,
+  job: Pick<JobRow, 'title' | 'company'> | null,
   opts: { model?: string; browserPath?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
 ): Promise<LinkResult> {
   const bad = checkLink(url);
@@ -177,6 +192,58 @@ export async function postingFromLink(
   const { text, finalUrl } = await renderPage(url, opts.browserPath);
   const blockedAfterRedirect = checkLink(finalUrl);
   if (blockedAfterRedirect) return { ok: false, reason: blockedAfterRedirect, cost: 0 };
-  const result = await extractPosting(text, job, opts);
+  const result = await extractPosting(text, job, { ...opts, url: finalUrl });
   return result.ok ? { ...result, finalUrl } : result;
+}
+
+const Details = Extract.omit({ description: true });
+
+const DETAILS_INSTRUCTIONS = `You get the text of one job posting that someone pasted. Say which job it is:
+
+- title, company, location as the text states them. company empty if the text doesn't name it. workplace_type from what the text says.
+- date_posted: YYYY-MM-DD only if the text states it, otherwise empty.
+- is_job_posting: false if the text isn't a job posting.
+
+Add nothing that isn't in the text.`;
+
+/**
+ * A description you pasted: Claude reads which job it is, and your text is kept as the description.
+ * The link is only where to apply; it isn't opened.
+ */
+export async function pastedPosting(
+  text: string,
+  url: string,
+  opts: { model?: string; client?: Pick<Anthropic, 'messages'>; meter?: CostMeter } = {},
+): Promise<{ ok: true; posting: PagePosting; cost: number } | { ok: false; reason: string; cost: number }> {
+  const description = text.trim();
+  if (description.length < 200) return { ok: false, reason: 'the description is too short to score or tailor from: paste the whole posting', cost: 0 };
+  const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
+  const model = opts.model ?? 'claude-sonnet-5-5';
+  const message = await client.messages.parse({
+    model,
+    max_tokens: 1000,
+    system: DETAILS_INSTRUCTIONS,
+    messages: [{ role: 'user', content: `<posting>\n${description.slice(0, 60_000)}\n</posting>` }],
+    output_config: { format: zodOutputFormat(Details), effort: 'low' },
+  });
+  const cost = opts.meter ? opts.meter.record('posting', model, message.usage) : usageCost(model, message.usage);
+  const x = message.parsed_output;
+  if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the description could not be read', cost };
+  if (!x.is_job_posting) return { ok: false, reason: "that text doesn't look like a job posting", cost };
+  const company = x.company.trim() || companyFromUrl(url);
+  if (!x.title.trim()) return { ok: false, reason: "the description doesn't say the job's title: include it in what you paste", cost };
+  if (!company) return { ok: false, reason: "the description doesn't name the company: include it in what you paste", cost };
+  const posted = /^\d{4}-\d{2}-\d{2}$/.test(x.date_posted.trim()) ? new Date(`${x.date_posted.trim()}T00:00:00Z`) : null;
+  return {
+    ok: true,
+    cost,
+    posting: {
+      title: x.title.trim(),
+      company,
+      location: x.location.trim() || undefined,
+      workplaceType: x.workplace_type,
+      postedAt: posted && !Number.isNaN(posted.getTime()) ? posted.toISOString() : undefined,
+      description,
+    },
+  };
 }

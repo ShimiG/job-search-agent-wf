@@ -1,6 +1,6 @@
 import type { JobStore } from '../db/store.ts';
 import { formatDollars, PURPOSE_LABELS, type UsagePurpose } from '../llm/cost.ts';
-import { outcomeOf } from './outcomes.ts';
+import { applicationOutcomes } from './outcomes.ts';
 
 /*
  * What the job search costs in Claude calls: in total, over the last 30 days by what the calls were
@@ -29,12 +29,8 @@ export function spendingReport(store: JobStore, now = new Date()): SpendingRepor
   const recent = store.usageByPurpose(new Date(now.getTime() - 30 * 86_400_000).toISOString());
 
   // Only applications sent since recording began: earlier ones cost something too, but it wasn't counted.
-  const sent = since ? store.appliedJobs().filter((j) => j.appliedAt >= since) : [];
-  const responses = store.responses();
-  const callbacks = sent.filter((j) => {
-    const outcome = outcomeOf(j, responses.filter((r) => r.jobId === j.id), now);
-    return outcome === 'callback' || outcome === 'offer';
-  }).length;
+  const sent = since ? applicationOutcomes(store, now).filter((a) => a.row.appliedAt >= since) : [];
+  const callbacks = sent.filter((a) => a.outcome === 'callback' || a.outcome === 'offer').length;
 
   return {
     since,

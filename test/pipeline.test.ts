@@ -64,8 +64,9 @@ describe('runScout', () => {
     logger: silentLogger,
     scorer,
     clock: () => clock,
-    // Never the network: found posting pages are re-checked over HTTP otherwise.
+    // Never the network: found posting pages and LinkedIn alert pages are re-checked over HTTP otherwise.
     checkPage: async () => 'unknown',
+    checkLinkedIn: async () => 'unknown',
     ...overrides,
   });
 
@@ -140,19 +141,6 @@ describe('runScout', () => {
     assert.equal(stats.appliedListings, 1);
     assert.deepEqual(scorer.calls, []);
     assert.deepEqual(store.listByStatus(['shortlisted']), []);
-  });
-
-  it('records replies to applications each run, after the confirmations that create them', async () => {
-    const stats = await runScout(
-      deps([], {
-        applied: async () => [{ company: 'Grain', title: 'AI Builder', via: 'company', appliedAt: '2026-10-01T09:00:00.000Z', rejected: false, subject: 'Thanks for applying' }],
-        replies: async () => [
-          { kind: 'interview', fromName: 'Grain Recruiting', fromAddress: 'no-reply@greenhouse.io', subject: 'Next steps', receivedAt: '2026-10-08T09:00:00.000Z', messageKey: 'm1', excerpt: '' },
-        ],
-      }),
-    );
-    assert.deepEqual(stats.replies, { recorded: { interview: 1 }, unmatched: 0 });
-    assert.equal(store.responses()[0]!.kind, 'interview');
   });
 
   it('replaces an alert-email job when the full posting shows up later', async () => {
@@ -334,6 +322,35 @@ describe('runScout', () => {
     assert.equal(store.listByStatus(['shortlisted']).length, 0);
   });
 
+  it("closes a LinkedIn alert job whose public page says it stopped taking applications, wherever it is", async () => {
+    const now = clock.toISOString();
+    const li = (n: number) => `https://www.linkedin.com/jobs/view/${n}/`;
+    const alert = (n: number, status: 'selected' | 'needs_manual' | 'submitted' | 'low_score') => {
+      const { id } = store.upsert(makeJob({ source: 'email', externalId: `linkedin:${n}`, url: li(n), title: `Engineer ${n}`, descriptionIsPartial: true }), now);
+      store.setStatus(id, status, null, 'user', now);
+      return id;
+    };
+    const [picked, stuck, sent, low] = [alert(1, 'selected'), alert(2, 'needs_manual'), alert(3, 'submitted'), alert(4, 'low_score')];
+    const asked: string[] = [];
+    const checkLinkedIn = async (url: string): Promise<'open' | 'closed'> => {
+      asked.push(url);
+      return url === li(2) || url === li(3) ? 'closed' : 'open';
+    };
+    const stats = await runScout(deps([], { checkLinkedIn }));
+    assert.deepEqual(asked.sort(), [li(1), li(2)], 'sent and below-cutoff jobs are not looked at');
+    assert.equal(stats.closedPostings, 1);
+    assert.equal(store.get(stuck)!.status, 'filtered_out');
+    assert.ok(store.get(stuck)!.closedAt);
+    assert.equal(store.get(picked)!.status, 'selected');
+    assert.equal(store.get(sent)!.status, 'submitted');
+    assert.equal(store.get(low)!.status, 'low_score');
+
+    // Turned off in config: nothing is opened.
+    asked.length = 0;
+    await runScout(deps([], { checkLinkedIn: null }));
+    assert.equal(asked.length, 0);
+  });
+
   it('does not close jobs a capped (incomplete) board fetch did not reach', async () => {
     let complete = true;
     let jobs = [atsJob('1', 'Backend Developer'), atsJob('2', 'Integration Engineer')];
@@ -349,7 +366,7 @@ describe('runScout', () => {
     assert.equal((await runScout(deps([capped]))).closed, 1, 'a complete fetch still closes what is gone');
   });
 
-    it('retries scoring errors up to maxAttempts', async () => {
+  it('retries scoring errors up to maxAttempts', async () => {
     const prefs = makePrefs({ scoring: { threshold: 65, maxJobsPerRun: 10, concurrency: 1, maxAttempts: 2 } });
     const adapter = board('greenhouse:acme', () => [atsJob('1', 'Boom Developer')]);
     const first = await runScout(deps([adapter], { prefs }));

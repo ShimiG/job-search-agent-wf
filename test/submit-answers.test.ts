@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type PlanContext } from '../src/submit/answers.ts';
+import { acceptsType, buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type PlanContext } from '../src/submit/answers.ts';
 import { bestOption } from '../src/submit/form.ts';
 import { applyMapped, mapWithRetry, type MapperInput } from '../src/submit/llm.ts';
 import { SubmitFileSchema, type FormField } from '../src/submit/schema.ts';
@@ -158,5 +158,48 @@ describe('model answers', () => {
     assert.equal(bestOption(['Yes', 'No'], 'yes'), 0);
     assert.equal(bestOption(['Decline To Self Identify', 'Male'], 'decline to self-identify'), 0);
     assert.equal(bestOption(['Tel Aviv', 'Haifa'], 'Berlin'), -1);
+  });
+});
+
+describe('certificates on application forms', () => {
+  const certificates = [
+    { file: '/data/certificates/cert-a.pdf', type: 'pdf' as const },
+    { file: '/data/certificates/cert-b.png', type: 'png' as const },
+  ];
+  const withCerts = (over: Partial<PlanContext> = {}) =>
+    ctx(undefined, { documents: { ...ctx().documents, certificates }, ...over });
+  const plan = (fields: FormField[], c = withCerts()) => planDeterministic(fields, c);
+
+  it('attaches your certificates to a field that asks for them: all when it takes several, else the first', () => {
+    const [many] = plan([field('Certifications', 'file', { multiple: true, required: false })]);
+    assert.equal(many!.value, '/data/certificates/cert-a.pdf\n/data/certificates/cert-b.png');
+    assert.equal(many!.source, 'document');
+    const [one] = plan([field('Upload your certificate', 'file')]);
+    assert.equal(one!.value, '/data/certificates/cert-a.pdf');
+    const [hebrew] = plan([field('תעודות והסמכות', 'file', { multiple: true })]);
+    assert.equal(hebrew!.value.split('\n').length, 2);
+  });
+
+  it('sends only the types the field accepts', () => {
+    assert.equal(plan([field('Certificates', 'file', { multiple: true, accept: 'image/*' })])[0]!.value, '/data/certificates/cert-b.png');
+    assert.equal(plan([field('Certificates', 'file', { accept: '.pdf,.doc' })])[0]!.value, '/data/certificates/cert-a.pdf');
+    const none = plan([field('Certificates', 'file', { accept: '.docx' })])[0]!;
+    assert.equal(none.value, '');
+    assert.match(none.detail!, /no certificate of a type/);
+    assert.ok(acceptsType('image/jpeg', 'jpg') && acceptsType('.JPEG', 'jpg') && acceptsType(undefined, 'pdf') && !acceptsType('.pdf', 'png'));
+  });
+
+  it("never sends certificates when the form has no field for them", () => {
+    const fields = [field('Resume/CV', 'file'), field('Cover Letter', 'file'), field('Attachments', 'file'), field('Portfolio', 'file'), field('Driver license', 'file')];
+    const values = plan(fields).map((p) => p.value);
+    assert.deepEqual(values, ['/tmp/x/Name-CV.pdf', '/tmp/x/Name-Cover-Letter.pdf', '/tmp/x/Name-CV.pdf', '', '']);
+    assert.ok(values.every((v) => !v.includes('/certificates/')));
+  });
+
+  it('leaves a required certificate field to you when you have none', () => {
+    const [p] = plan([field('Certifications', 'file')], ctx());
+    assert.equal(p!.value, '');
+    assert.equal(p!.source, 'none');
+    assert.match(p!.detail!, /no certificates uploaded/);
   });
 });

@@ -154,6 +154,7 @@ const capBullets = (c: TailoredContent, max: number, which: 'recent' | 'older'):
  */
 const SHRINK: Shrink[] = [
   { what: 'skills cut to 10', apply: (c) => (c.skills.length > 10 ? { ...c, skills: c.skills.slice(0, 10) } : null) },
+  { what: 'certifications cut to 2', apply: (c) => ((c.certifications?.length ?? 0) > 2 ? { ...c, certifications: c.certifications!.slice(0, 2) } : null) },
   { what: 'one project instead of two', apply: (c) => (c.projects.length > 1 ? { ...c, projects: c.projects.slice(0, 1) } : null) },
   { what: 'older roles cut to 2 bullets', apply: (c) => capBullets(c, 2, 'older') },
   {
@@ -171,6 +172,7 @@ const SHRINK: Shrink[] = [
   { what: 'older roles cut to 1 bullet', apply: (c) => capBullets(c, 1, 'older') },
   { what: 'most recent role cut to 3 bullets', apply: (c) => capBullets(c, 3, 'recent') },
   { what: 'smaller type and margins', compact: true },
+  { what: 'certifications left out', apply: (c) => (c.certifications?.length ? { ...c, certifications: [] } : null) },
   { what: 'projects left out', apply: (c) => (c.projects.length ? { ...c, projects: [] } : null) },
 ];
 
@@ -259,7 +261,10 @@ export async function tailorJob(job: JobRow, deps: TailorDeps): Promise<{ app: A
   });
   deps.store.setTailorFeedback(job.id, null);
   const unresolved = report.issues.filter((i) => i.severity === 'unresolved').length;
-  deps.store.setStatus(job.id, 'tailored', unresolved ? `v${app.version}: ${unresolved} item(s) need your review` : `v${app.version} ready`, 'tailor', now.toISOString());
+  // Removed on the review page while this was written: it stays removed (the version is kept on disk).
+  if (deps.store.get(job.id)?.status !== 'dismissed') {
+    deps.store.setStatus(job.id, 'tailored', unresolved ? `v${app.version}: ${unresolved} item(s) need your review` : `v${app.version} ready`, 'tailor', now.toISOString());
+  }
   return { app, report, files };
 }
 
@@ -295,7 +300,7 @@ export async function runTailor(deps: TailorDeps, opts: { jobIds?: number[] } = 
       logger.info(`#${job.id}: v${app.version} written to ${app.dir}${report.ok ? '' : ' (needs review)'}`);
     } catch (err) {
       const message = (err as Error).message;
-      store.setStatus(job.id, 'tailor_error', message.slice(0, 500), 'tailor', new Date().toISOString());
+      if (store.get(job.id)?.status !== 'dismissed') store.setStatus(job.id, 'tailor_error', message.slice(0, 500), 'tailor', new Date().toISOString());
       stats.errors.push({ jobId: job.id, error: message });
       logger.warn(`#${job.id}: tailoring failed: ${message}`);
     }

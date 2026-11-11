@@ -1,6 +1,6 @@
 # Job Agents
 
-A job search pipeline built from three AI agents that share one SQLite database, with a local web page
+A job search pipeline built from four AI agents that share one SQLite database, with a local web page
 that coordinates each run.
 
 - **Scout** collects postings from company job boards and from LinkedIn and Indeed alert emails, drops
@@ -9,6 +9,9 @@ that coordinates each run.
   against your own CV.
 - **Submitter** fills in and submits the application forms: with you clicking Submit, or on its own
   within limits you set.
+- **Archiver** reads your email every hour and files each reply (rejection, assessment, interview,
+  offer) under its application, with a running report. A local model reads your mail, so it never
+  leaves your Mac.
 - **The review page** (`npm run review`) is where you follow a run: matches appear as they're scored,
   you pick jobs, read and approve the tailored applications, and watch them being sent.
 
@@ -38,7 +41,7 @@ Requires Node.js 22+, Google Chrome (for PDFs and filling forms), and an
    ```bash
    npm run review               # opens http://127.0.0.1:4100
    ```
-   In the **Your CV** tab, upload a PDF or Word file. Check the preview (anything not word for word
+   Under **Settings → Your CV**, upload a PDF or Word file. Check the preview (anything not word for word
    from your file is flagged) and click **Save as my CV**. The starter CV is blank, so **Run Scout**
    stays greyed out until you've saved one (scheduled runs skip too: scoring needs your CV).
 4. **Say what you're looking for** in `config/preferences.json`: target roles, title keywords,
@@ -82,7 +85,10 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `.env` setting | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | Required for scoring, tailoring, lookups and CV upload. |
-| `SCOUT_MODEL`, `TAILOR_MODEL`, `ENRICH_MODEL` | Models for scoring, tailoring/form answers, and web lookups. `claude-haiku-5-5` is much cheaper for scoring. |
+| `SCOUT_ADVISOR_MODEL` | A stronger model the Claude scorer consults on borderline postings (provisional score 50–80, or an unclear requirement), at most once per job. Default `claude-opus-5-5`; `off` turns it off. Not used with a local model. |
+| `SCOUT_MODEL`, `TAILOR_MODEL`, `ENRICH_MODEL` | Models for scoring, tailoring/form answers, and web lookups. `claude-haiku-5-5` is much cheaper for scoring; `ollama:gemma3:12b` scores for free on your Mac (see [Local models](#local-models-ollama)). |
+| `ARCHIVER_MODEL` | The local model that reads your email for the Archiver. Default `ollama:gemma3:12b`. |
+| `OLLAMA_URL` | Where Ollama listens. Default `http://127.0.0.1:11434`. |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASSWORD` | The inbox Scout reads: alert emails, application confirmations, security codes. |
 | `REVIEW_REMOTE=true` | Lets your phone open the review page (see [On your phone](#on-your-phone)). |
 | `REVIEW_AUTO_OPEN=false` | Stops Scout from opening the review page when it finishes. |
@@ -153,13 +159,17 @@ Alert emails only say the title, company and location, so these jobs are **parti
 - **Web lookup:** for partial jobs that make your shortlist, Claude looks for the same job on the
   company's own careers page (or a site copying it) and copies the full posting. It's accepted only if
   the text matches a page Claude actually fetched. The job is then scored again against the full-posting
-  cutoff, and the company's application page becomes where the Submitter applies. LinkedIn, Indeed,
-  Glassdoor and ZipRecruiter are never searched or fetched. About 10 cents per lookup;
+  cutoff, and the company's application page becomes where the Submitter applies. Claude never searches
+  or fetches LinkedIn, Indeed, Glassdoor or ZipRecruiter. About 10 cents per lookup;
   `enrich.maxPerRun` caps them per run.
 - **Old jobs:** alert emails carry no posting date, so a LinkedIn job's age is estimated from its job ID
   (they're handed out in order). Jobs clearly past twice `maxAgeDays` are dropped before scoring.
 - **Closed jobs:** a looked-up posting that says it's closed, or a company page that disappears, takes
-  the job off your shortlist.
+  the job off your shortlist. LinkedIn alert jobs are checked too: each run re-opens the job's public
+  LinkedIn page (the one anyone sees without signing in; one plain request, no search, no sign-in) for
+  jobs from your shortlist up to ones stuck in Sending, at most 40 a run, and a page showing "No longer
+  accepting applications" closes the job wherever it is. A page LinkedIn won't show (a sign-in wall, a
+  rate limit) changes nothing. `"checkClosed": false` under `emailAlerts` turns this off.
 
 ### Applications you send yourself
 
@@ -180,26 +190,26 @@ protected the same way, so nothing is applied to twice. Removed listings are kep
 job they repeat, with the reason, and cost nothing to score. The run summary shows how many were
 skipped. Picking a dismissed job again (`npm run scout -- pick <id>`) brings it back.
 
-### Results: which applications get callbacks
+The Archiver covers the rest: any reply it reads about an application nothing has recorded (a
+confirmation worded some other way, a rejection, an assessment, an interview, an offer) records that
+application from the email, so applications you sent yourself count in the stats like the ones sent
+here. See [Archiver](#archiver).
 
-Scout also reads replies to your applications from the same inbox: interview invitations, take-home
-assignments, offers and rejections, in English and Hebrew. Each is tied to the application it answers
-(by the sender's domain or name, the subject, or for ATS emails the company named in the text; a reply
-that could fit two companies is left out rather than guessed). Confirmations that only promise "if
-you're selected, we'll schedule an interview" don't count.
+### Which applications get callbacks, and what it costs
 
-The **Results** tab (or `npm run scout -- results`) shows your callback rate overall and by source
-(LinkedIn alerts, Drushim, a company's board…), by score band, and by how you applied (the Submitter,
-you with the tailored CV, or you on your own). A callback is an interview, an assignment or an offer, and
-an interview followed by a rejection still counts. Applications from the last 14 days are shown as
-waiting and left out of the rate. Use it to tune your score cutoffs and drop sources that never answer.
-Turn it off with `"trackReplies": false`; `repliesSinceDays` (default 90) sets how far back to read.
+The Archiver's replies also show which sources and scores pay off. The **Stats** tab (and
+`npm run scout -- results`) breaks your applications down by where Scout found the job (LinkedIn alerts,
+Drushim, a company's board…) and by the score it gave it, with a callback rate for each. A callback is
+an assessment, an interview or an offer, and one followed by a rejection still counts. Applications from
+the last 14 days show as waiting and are left out of the rate. Use it to tune your score cutoff and drop
+sources that never answer.
 
 **What it costs.** Every Claude call is recorded with its token counts and priced at list rates for the
-model that ran it: scoring, web lookups, tailoring, fact-checking, form answers, pasted links and CV
-uploads. Each run's summary ends with its cost; the Results tab and `npm run scout -- results` show the
-last 30 days by purpose, the total, and the all-in cost per application sent and per callback (scoring
-jobs you skipped is part of what an application costs). Cards in Ready to send and Sent show what that
+model that ran it: scoring (the advisor's part at the advisor's rate), web lookups, tailoring,
+fact-checking, form answers, pasted links and CV uploads. A local model costs nothing and isn't counted,
+nor is the Archiver. Each run's summary ends with its cost; the Stats tab and `npm run scout -- results`
+show the last 30 days by purpose, the total, and the all-in cost per application sent and per callback
+(scoring jobs you skipped is part of what an application costs). Cards in Ready to send show what that
 job has cost so far. Figures are estimates from token counts; your Anthropic console has the exact
 bill. Prices live in `src/llm/cost.ts`: a model that isn't listed there is priced as Sonnet 5.5.
 
@@ -215,9 +225,15 @@ npm run review               # http://127.0.0.1:4100
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
-| **Sent** | The last 14 days, with every answer Claude wrote on each form. |
-| **Results** | Your callback rate, by source, score band and how you applied, what the search has cost, and the latest replies (see [Results](#results-which-applications-get-callbacks)). |
+| **Applied** | Every application in play, sent by the Submitter or by you: its stage (read from your email by the Archiver, or set by you), replies, things you're asked to do, its CV and cover letter, and every answer Claude wrote on the form. **Check email now** runs the Archiver. An application moves to **Settings → Archive** 30 days after you applied (whatever its stage), when you set its stage to Rejected yourself, or with **Send to archive**. A rejection read from email alone doesn't move it. |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
+| **Stats** | How your applications are doing: replies, interviews, applications per week, how many were sent with this tool and how many by you, callback rates by source and by score, and what Claude has cost. |
+| **Settings** | The shortlist's minimum score, **Review before sending**, your CV and certificates, and the **Archive**: applications moved out of Applied (**Back to Applied** returns one, even one older than 30 days), and picked jobs never sent. |
+
+**Remove** on any card (Shortlist, Below cutoff, Tailoring, Sending; it's **Reject** in Ready to send)
+takes the job off every list, whatever stage it's at, and nothing applies to it. If the Tailor or
+Submitter was working on it, it stays removed. A sent application is your record: archive it instead.
+From the terminal: `npm run scout -- remove <id...>`.
 
 **Paste a link** to the company's own page for a job (from LinkedIn's Apply button, a careers site…).
 What it does depends on where the job is:
@@ -230,7 +246,18 @@ What it does depends on where the job is:
 
 The page must be open and about the same job, or it's refused; a closed one removes the job. LinkedIn,
 Indeed, Glassdoor and ZipRecruiter links are refused: open the job there and paste the company page you land on.
-| **Your CV** | Upload a new CV, see the current one. |
+
+**Add a job** (top of the page) adds one Scout didn't find. The link is required; the description is
+optional:
+
+| You paste | What happens | Cost |
+|---|---|---|
+| The link only | The posting is read from the page (same rules as pasting a link above). **Add and score** puts it on your shortlist with a score; **Send straight to Tailor** skips scoring and tailors from the posting. | about 2–3¢ + scoring or tailoring |
+| The link and the description | **Score it** puts it on your shortlist with a score; **Send straight to Tailor** skips scoring. The link isn't opened: it's only where the Submitter applies. | about 1¢ + scoring or tailoring |
+
+A job you add skips the hard filters and stays on your shortlist whatever it scores. One already on
+your shortlist or further along (same link, or same company and title) is refused, so nothing is
+applied to twice.
 
 **Run Scout** starts a run from the page. With the LangGraph server up, every step runs there (a
 pipeline run waiting at its pick or approval step is continued from the page); without it, the page
@@ -246,9 +273,17 @@ Chosen at the top of the page; the mode set when you approve is the one used.
 | **Prepare** | hidden | Never. Fills the form and saves a screenshot, to check what it would send. |
 | **Auto** | hidden | Yes, within the limits in [Auto mode](#auto-mode). Needs `"autoSubmit": true`. |
 
+### Shortlist minimum score
+
+**Settings → Shortlist** sets the score a job needs to reach your shortlist (0–100, default 65), and a
+separate minimum for job alerts known only by their title (empty: the same). They're saved to
+`scoring.threshold` and `scoring.partialThreshold` in `config/preferences.json`, and jobs already scored
+move onto or off your shortlist right away, without scoring anything again. Jobs you add yourself stay
+on it whatever they score.
+
 ### Review before sending
 
-The switch at the top (`requireApproval` in `config/submit.json`). **On** (default): each tailored
+The switch under **Settings → Sending** (`requireApproval` in `config/submit.json`). **On** (default): each tailored
 application waits in **Ready to send** for you. **Off**: applications go to the Submitter as soon as
 they're tailored, in the current mode. Ones with claims the fact-check couldn't verify still wait for you.
 
@@ -258,6 +293,24 @@ Upload a PDF or Word (.docx) CV and Claude converts it into `data/master-cv.json
 (about 5 cents). You see the result before saving: any line not word for word in your file is flagged,
 and you can add LinkedIn, GitHub and website links that a PDF only shows as clickable words. Saving keeps
 the previous CV as a backup and puts your email and phone in `config/tailor.json`.
+
+### Certificates
+
+**Settings → Certificates** keeps certificates you hold: PDF, PNG or JPG, up to 5 MB each, at most 20.
+The file type is checked from its content, not its name. Give each a title as it should read on your
+CV, and optionally who issued it and the year. Files and their details are stored in
+`data/certificates/`, and you can view or remove each one there.
+
+- **Scout:** scoring sees them as part of your CV, so a certification a posting asks for counts as met.
+  Jobs already scored keep their score; `npm run scout -- reevaluate` scores them again.
+- **Tailor:** your certificates are part of the CV it writes from. It lists the ones relevant to the
+  job under **Certifications** (up to `cv.maxCertifications`, default 4), in your wording, and may cite
+  one in the cover letter. The fact-check treats them like the rest of your CV, so a certificate you
+  didn't upload is removed.
+- **Submitter:** attaches them only to an upload field that asks for certificates or certifications
+  (also תעודות/הסמכות). A field that takes several files gets all of them, a single upload gets the
+  first you added, and only types the field accepts are sent. A form without such a field never gets
+  them.
 
 ### On your phone
 
@@ -289,8 +342,40 @@ the Mac is asleep at that time, the run happens when it wakes; if it's off, that
 skipped if Scout is already running. The log is `data/logs/scout-schedule.log`. If you switch Node
 versions, run `on` again: the job points at the current Node.
 
+The Archiver has its own hourly job (log: `data/logs/archiver-schedule.log`):
+
+```bash
+npm run schedule -- archiver on | status | off
+```
+
 Elsewhere, keep `npm run scout -- watch --cron "0 8 * * 0,2,4"` running, or have cron or Task Scheduler
 run `npm run scout -- run --open-review` in the project folder.
+
+## Local models (Ollama)
+
+The Archiver, and optionally scoring, run on a model on your own Mac through
+[Ollama](https://ollama.com): free, and nothing is sent anywhere. `gemma3:12b` needs about 8 GB of disk
+and runs well on an Apple Silicon Mac with 16 GB of memory or more.
+
+```bash
+brew install ollama
+brew services start ollama      # runs in the background, also after a restart
+ollama pull gemma3:12b
+```
+
+To score with it, set `SCOUT_MODEL=ollama:gemma3:12b` in `.env`. It's slower than Claude (about
+20–30 seconds a job) and less sharp, so it learns from Claude: the prompt includes eight jobs Claude
+already scored, spread from poor to strong fits, to copy Claude's strictness. Before switching, see how
+close it gets on your own jobs:
+
+```bash
+npm run scout -- compare-scorers --limit 40
+```
+
+It re-scores jobs Claude scored (not the examples), and writes `data/scorer-comparison.md`: the average
+difference, how often both make the same shortlist decision, the score shift that lines them up best,
+and the jobs they disagree on. Nothing is saved to the jobs. Web lookups for alert jobs still use
+Claude.
 
 ## LangGraph (optional)
 
@@ -299,7 +384,7 @@ The agents are also LangGraph graphs (`src/graph/graphs.ts`):
 | Graph | What it does |
 |---|---|
 | `pipeline` | Scout → pause for your picks → Tailor → pause for your approval → Submitter |
-| `scout`, `tailor`, `submitter` | One agent each |
+| `scout`, `tailor`, `submitter`, `archiver` | One agent each |
 
 ```bash
 npm run graph          # LangGraph dev server on http://127.0.0.1:2024
@@ -341,6 +426,34 @@ either cutoff re-sorts scored jobs on the next run without scoring them again. `
 caps scoring per run; the rest wait for the next run. Postings are untrusted input: the prompt tells the
 model to ignore instructions inside them. After changing preferences or your CV,
 `npm run scout -- reevaluate` sends Scout's jobs back through filters and scoring.
+
+### Archiver
+
+Each run reads the email that arrived since the last one (the first run goes back to your earliest
+application, at most 90 days):
+
+1. **Sender and subject only.** Alerts, security codes and newsletters are skipped. An email is read if
+   its subject is about an application or interview (English or Hebrew), or it comes from a company you
+   applied to or an applicant tracking system.
+2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
+   goes to the local model, which answers: confirmation, viewed, rejection, assessment, interview,
+   offer, update, or not about an application. It also gives the company, the role, a one-line summary,
+   and anything you're asked to do ("pick a slot by Thursday").
+3. **Matching.** Each reply is filed under the application at the same company, then the closest title.
+   The same job sent through LinkedIn and the company site counts as one application. A reply with no
+   application to file under (you applied yourself, and nothing recorded it) creates one: a
+   confirmation, a rejection, an assessment, an interview or an offer all mean you applied, so the
+   application is recorded from the email, dated by it, as sent **from your email**, and counts in the
+   stats like any other. Only a reply naming a company or a role can be recorded; the rest stay listed
+   as unmatched in the report.
+4. **Report.** The **Applications** tab on the review page and `data/applications-report.md`: applied,
+   waiting, assessment, interview, offer and rejected counts; how many applications were sent with this
+   tool and how many by you (the other figures cover both); response rate; how many reached an
+   interview; average days to a reply; applications with no reply after 14 days; and each application's
+   furthest stage ("Rejected after interview"), replies and to-dos.
+
+Every email it reads is recorded in `responses`, so none is read twice. If Ollama is down, the run stops
+and that email is read on the next run. **Check email now** on the Applications tab runs it right away.
 
 ### Tailor
 
@@ -401,7 +514,7 @@ LinkedIn or Indeed, and only if that page mentions the job's title.
 
 Off until `"autoSubmit": true`. `autoSubmitModelAnswers` says which answers Claude wrote may be sent
 without you seeing them first: `none` (every answer must come from your data), `facts` (taken from your
-CV; written answers like "Why us?" stop it) or `all`. The **Sent** tab lists them afterwards. Auto mode
+CV; written answers like "Why us?" stop it) or `all`. Each application in **Applied** lists them afterwards. Auto mode
 always stops and hands the job to you when:
 
 - a required question is unanswered, or your answer bank says to ask you,
@@ -426,11 +539,14 @@ Measured or estimated with the default models:
 | Step | Cost |
 |---|---|
 | Scoring | about 0.1¢ per job with Haiku 5.5, more with Sonnet |
+| Scoring advisor (borderline jobs only) | about 3–7¢ per consultation with Opus 5.5 (the first in a run writes its cache) |
 | Web lookup for a shortlisted alert job | about 10¢ each (capped by `enrich.maxPerRun`) |
 | Tailoring | about 10–30¢ per application |
 | Submitter | a few cents per application, only for questions it answers itself |
 | CV upload | about 5¢ |
-| Reading email, security codes, tracking your applications | free |
+| Adding a job yourself | 1–3¢ to read it, plus scoring |
+| Reading email, security codes, tracking your applications, the Archiver | free |
+| Scoring with a local model | free |
 
 Set a monthly spend limit in the [Claude Console](https://platform.claude.com) to cap the total.
 
@@ -440,9 +556,13 @@ Set a monthly spend limit in the [Claude Console](https://platform.claude.com) t
 # Scout
 npm run scout -- run [--no-score] [--open-review]
 npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [--md]
-npm run scout -- show <id> | pick <id...> | dismiss <id...> | reevaluate
+npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
 npm run scout -- watch [--cron "0 8 * * *"]
+npm run scout -- compare-scorers [--limit 40]
+
+# Archiver
+npm run archive
 
 # Tailor
 npm run tailor -- run [--job 12,15] [--no-pdf]
@@ -456,6 +576,7 @@ npm run submit -- list | show <id> | retry <id> | mark-submitted <id> [--note ".
 # Everything else
 npm run review                          # the review page
 npm run schedule -- on [HH:MM] [--days sun-thu] | status | off
+npm run schedule -- archiver on | status | off
 npm run graph                           # LangGraph dev server (graph:tunnel for Safari)
 ```
 
@@ -473,8 +594,9 @@ discovered ─► filtered_out | duplicate
 
 Scout only changes statuses up to `shortlisted`. Every change is recorded in `status_history` with who
 made it (`scout`, `user`, `tailor`, `submitter`). `applications` keeps every tailored version,
-`submissions` every Submitter attempt (fields, sources, screenshots, confirmation), `runs` per-run
-stats, and `source_health` each board's last result.
+`submissions` every Submitter attempt (fields, sources, screenshots, confirmation), `responses` every
+email the Archiver read and what it was, `runs` per-run stats, and `source_health` each board's last
+result. `jobs.scored_by` records which model gave each score.
 
 ## Project layout
 
@@ -487,9 +609,12 @@ src/
   schedule.ts            the launchd schedule
   db/store.ts            SQLite store, migrations, history
   sources/               ATS adapters, alert emails, application confirmations, URL detection
-  pipeline/              filters, dedupe, run steps, applied jobs, job age, closed postings
-  llm/                   scoring, and web lookups for full postings
+  pipeline/              filters, dedupe, run steps, applied jobs, job age, closed postings, jobs you add
+  llm/                   scoring (Claude or Ollama), web lookups for full postings, scorer comparison
+  archiver/              reading replies, sorting them, the applications report
   cv/import.ts           CV upload: PDF/Word to the master CV
+  cv/certificates.ts     your certificates: validation, storage, what the Tailor sees
+  settings.ts            settings saved from the review page (the shortlist's minimum score)
   tailor/                draft, rules, fact-check, render
   submit/                answers, form filling, security codes, modes and records
   graph/graphs.ts        the LangGraph graphs

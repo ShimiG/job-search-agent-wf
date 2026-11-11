@@ -4,9 +4,8 @@ import { MasterCvSchema } from '../src/config.ts';
 import { JobStore } from '../src/db/store.ts';
 import { CostMeter, formatDollars, usageCost, withJob } from '../src/llm/cost.ts';
 import { enrichCost } from '../src/llm/enrich.ts';
-import { AnthropicScorer } from '../src/llm/scorer.ts';
+import { AnthropicScorer, createScorer } from '../src/llm/scorer.ts';
 import { formatRunStats } from '../src/output/report.ts';
-import { recordReplies } from '../src/pipeline/outcomes.ts';
 import { runScout } from '../src/pipeline/run.ts';
 import { formatSpendingReport, spendingReport } from '../src/pipeline/spending.ts';
 import { markSubmitted } from '../src/submit/run.ts';
@@ -95,7 +94,29 @@ describe('cost meter', () => {
     );
   });
 
-  it("puts a Scout run's cost in its stats and summary", async () => {
+  it("prices the advisor's part of a score at the advisor's rate, and a local model at nothing", async () => {
+    const store = new JobStore(':memory:');
+    const { id } = store.upsert(makeJob(), NOW.toISOString());
+    const meter = new CostMeter('scout');
+    meter.attach(store);
+    const reply = {
+      stop_reason: 'end_turn',
+      parsed_output: { score: 70, seniorityFit: 'fit', matchReasons: [], gaps: [], dealbreakers: [], summary: 'ok' },
+      usage: { input_tokens: 100_000, output_tokens: 0, iterations: [{ type: 'message', input_tokens: 100_000, output_tokens: 0 }, { type: 'advisor_message', model: 'claude-opus-5-5', input_tokens: 100_000, output_tokens: 0 }] },
+    };
+    const client = { messages: { parse: async () => reply }, beta: { messages: { parse: async () => reply } } };
+    const scorer = new AnthropicScorer({ cv, prefs: makePrefs(), model: 'claude-haiku-5-5', advisor: 'claude-opus-5-5', meter, client: client as never });
+    await scorer.score(store.get(id)!);
+    assert.deepEqual(store.db.prepare('SELECT model, cost FROM usage ORDER BY id').all(), [
+      { model: 'claude-haiku-5-5', cost: 0.01 },
+      { model: 'claude-opus-5-5', cost: 0.4 },
+    ]);
+
+    const local = createScorer({ cv, prefs: makePrefs(), model: 'ollama:gemma3:12b', meter });
+    assert.equal(local.model, 'ollama:gemma3:12b', 'a local scorer never touches the meter');
+  });
+
+    it("puts a Scout run's cost in its stats and summary", async () => {
     const store = new JobStore(':memory:');
     const meter = new CostMeter('scout');
     const scorer = {
@@ -126,7 +147,11 @@ describe('spending report', () => {
     apply('old:1', 'Before Tracking', 80);
     const a = apply('a:1', 'Grain', 30);
     apply('b:1', 'Beta', 20);
-    recordReplies(store, [{ kind: 'interview', fromName: 'Grain', fromAddress: 'x@grain.co', subject: 'Interview', receivedAt: at(10).toISOString(), messageKey: 'k', excerpt: '' }], NOW.toISOString());
+    // A reply the Archiver filed under the Grain application.
+    store.saveResponse(
+      { messageId: '<k@grain>', jobId: a, receivedAt: at(10).toISOString(), fromName: 'Grain', fromAddress: 'x@grain.co', subject: 'Interview', kind: 'interview', company: 'Grain', title: '', summary: 'Invited to interview', action: '', model: 'test' },
+      NOW.toISOString(),
+    );
 
     for (const [purpose, dollars, daysAgo, jobId] of [['score', 1, 60, null], ['score', 0.5, 10, null], ['draft', 0.5, 5, a]] as const) {
       const meter = new CostMeter('scout', () => at(daysAgo));

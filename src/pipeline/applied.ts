@@ -79,7 +79,7 @@ function canonical(store: JobStore, job: JobRow): JobRow {
 }
 
 function note(app: AppliedEmail): string {
-  const via = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site' }[app.via];
+  const via = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site', email: 'per your email' }[app.via];
   return `you applied ${via} on ${app.appliedAt.slice(0, 10)}${app.rejected ? '; they declined' : ''}`;
 }
 
@@ -88,7 +88,7 @@ function note(app: AppliedEmail): string {
  * jobs exactly; others match on company and a near-identical title, the same rule as dedupe.
  * Safe to run every time: applications already recorded are skipped.
  */
-export function recordApplications(store: JobStore, apps: AppliedEmail[], now: string): AppliedStats {
+export function recordApplications(store: JobStore, apps: AppliedEmail[], now: string, opts: { repliesToo?: boolean } = {}): AppliedStats {
   const stats: AppliedStats = { matched: 0, added: 0 };
   // Titled ones first, so "Thanks for applying to Acme" (no title) can see Acme is already covered.
   const ordered = [...apps].sort((a, b) => Number(!a.title) - Number(!b.title) || a.appliedAt.localeCompare(b.appliedAt));
@@ -114,6 +114,10 @@ export function recordApplications(store: JobStore, apps: AppliedEmail[], now: s
       }
       continue;
     }
+
+    // A rejection with no matching job is a reply to an application recorded some other way (or
+    // under another name), not a new one. The Archiver files it, and records it when nothing else has.
+    if (app.rejected && !opts.repliesToo) continue;
 
     // The same application often sends two emails (LinkedIn's and the company's). Record it once.
     const submitted = atCompany.filter((c) => c.status === 'submitted');

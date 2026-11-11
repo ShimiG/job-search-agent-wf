@@ -1,4 +1,5 @@
-export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'workday', 'smartrecruiters', 'email'] as const;
+/** `manual`: a job you added yourself on the review page, from its link (and description, if you pasted one). */
+export const SOURCE_KINDS = ['greenhouse', 'lever', 'ashby', 'workable', 'comeet', 'workday', 'smartrecruiters', 'email', 'manual'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 export type WorkplaceType = 'remote' | 'hybrid' | 'onsite' | 'unknown';
@@ -44,6 +45,8 @@ export const JOB_STATUSES = [
   'submitted',
   'needs_manual',
   'failed',
+  /** Picked or tailored but not sent, and untouched for two weeks: kept in the Archive, restorable. */
+  'archived',
 ] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 

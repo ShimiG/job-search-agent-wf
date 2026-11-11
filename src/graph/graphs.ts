@@ -7,6 +7,7 @@ import { Annotation, END, START, StateGraph, interrupt } from '@langchain/langgr
 import {
   ConfigError,
   MasterCvSchema,
+  type MasterCv,
   PreferencesSchema,
   SourcesSchema,
   imapCredentialsFromEnv,
@@ -17,12 +18,14 @@ import {
 import { applyPicks, applyReview, unresolvedCount, type Skipped } from '../decisions.ts';
 import { JobStore } from '../db/store.ts';
 import { openReviewPage, reviewUrl } from '../review/launch.ts';
+import { certificateFiles, withCertificates } from '../cv/certificates.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
+import { archive, type ArchiverStats } from '../archiver/run.ts';
 import { AnthropicEnricher } from '../llm/enrich.ts';
-import { AnthropicScorer } from '../llm/scorer.ts';
+import { createScorer, scorerProblem } from '../llm/scorer.ts';
 import { runScout, type RunStats } from '../pipeline/run.ts';
 import { CostMeter } from '../llm/cost.ts';
-import { applicationMailSource } from '../sources/applications.ts';
+import { appliedEmailsSource } from '../sources/applications.ts';
 import { createBoardAdapter } from '../sources/ats.ts';
 import type { SourceAdapter } from '../sources/common.ts';
 import { DEFAULT_FEEDS, createEmailAlertAdapter } from '../sources/email-alerts.ts';
@@ -80,18 +83,23 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
   const paths = resolvePaths();
   const logger = createLogger();
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
-  let scorer: AnthropicScorer | undefined;
+  const model = process.env.SCOUT_MODEL;
   const meter = new CostMeter('scout');
+  let cv: MasterCv | undefined;
   if (!noScore) {
     if (!cvStatus().ready) throw new ConfigError(UPLOAD_CV_FIRST);
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env, or run with noScore: true to skip scoring.');
-    }
-    scorer = new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL, meter });
+    const problem = await scorerProblem(model);
+    if (problem) throw new ConfigError(`${problem}, or run with noScore: true to skip scoring.`);
+    cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
   }
-  const { applied, replies } = applicationMailSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
-  const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
-  return withStore((store) => runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, replies, enricher, meter }));
+  const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
+  const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
+  return withStore((store) => {
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
+    // The web lookup is Claude's, so it needs the API key even when scoring is local.
+    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
+    return runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
+  });
 }
 
 export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): Promise<TailorRunStats> {
@@ -99,7 +107,8 @@ export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): 
   const paths = resolvePaths();
   if (!existsSync(paths.tailor)) throw new ConfigError(`Missing ${paths.tailor}. Run "npm run scout -- init" to create it.`);
   const cfg = loadJsonFile(paths.tailor, TailorConfigSchema);
-  const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
+  // Your uploaded certificates are part of the CV the Tailor writes and fact-checks from.
+  const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
   const meter = new CostMeter('tailor');
   const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL, meter });
   const pdf = cfg.pdf.enabled && !noPdf ? await launchPdfEngine(cfg.pdf.browserPath) : null;
@@ -142,6 +151,7 @@ export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode
           browser,
           logger,
           codes: imap ? createImapCodeSource(imap, logger) : null,
+          certificates: certificateFiles(paths.certificatesDir),
           onAssist: (info) =>
             logger.info(`#${info.job.id} ${info.job.company} — ${info.job.title}: the form is open in the browser. Review it and click Submit.`, {
               needsYou: info.unresolved.map((u) => u.label),
@@ -226,6 +236,16 @@ export const scout = new StateGraph(
   .addEdge('notify', 'scout')
   .addEdge('scout', END)
   .compile({ name: 'scout' });
+
+export const archiver = new StateGraph(
+  Annotation.Root({
+    archiverStats: Annotation<ArchiverStats | undefined>,
+  }),
+)
+  .addNode('archive', async () => ({ archiverStats: await archive(resolvePaths(), createLogger()) }))
+  .addEdge(START, 'archive')
+  .addEdge('archive', END)
+  .compile({ name: 'archiver' });
 
 export const tailor = new StateGraph(
   Annotation.Root({

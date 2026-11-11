@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, it } from 'node:test';
-import { checkApplyPage, checkLink, extractPosting, renderPage, sameTitle, textMentionsTitle } from '../src/llm/posting.ts';
+import { checkApplyPage, checkLink, extractPosting, pastedPosting, renderPage, sameTitle, textMentionsTitle } from '../src/llm/posting.ts';
 
 const description =
   'You will build agentic workflows for our customers: design the integrations, write the orchestration code in TypeScript, and run them in production. Requirements: three years building integrations, REST APIs, and experience with LLM agents in production.';
@@ -50,6 +50,27 @@ describe('reading a pasted application link', () => {
     assert.equal(closed.ok ? false : closed.closed, true);
     const list = await extractPosting(page, job, { client: client({ is_job_posting: false }) });
     assert.match(list.ok ? '' : list.reason, /isn't a single job posting/);
+  });
+
+  it('reads a job you are adding from its page alone, naming the company from an ATS link if the page does not', async () => {
+    const r = await extractPosting(page, null, { client: client({ title: 'Anything Else', company: '' }), url: 'https://job-boards.greenhouse.io/acme/jobs/1' });
+    assert.ok(r.ok);
+    if (r.ok) assert.deepEqual([r.posting.title, r.posting.company], ['Anything Else', 'Acme']);
+    const unnamed = await extractPosting(page, null, { client: client({ company: '' }), url: 'https://careers.example/jobs/1' });
+    assert.match(unnamed.ok ? '' : unnamed.reason, /doesn't say the job's title and company/);
+  });
+
+  it('keeps a pasted description word for word, and asks for the company or title when missing', async () => {
+    const pasted = `  ${description}\nBenefits: lunch.  `;
+    const r = await pastedPosting(pasted, 'https://careers.example/jobs/1', { client: client({}) });
+    assert.ok(r.ok);
+    if (r.ok) assert.equal(r.posting.description, pasted.trim());
+    const noCompany = await pastedPosting(description, 'https://careers.example/jobs/1', { client: client({ company: '' }) });
+    assert.match(noCompany.ok ? '' : noCompany.reason, /doesn't name the company/);
+    const fromLink = await pastedPosting(description, 'https://jobs.lever.co/acme/1', { client: client({ company: '' }) });
+    assert.equal(fromLink.ok && fromLink.posting.company, 'Acme');
+    const short = await pastedPosting('Engineer wanted.', 'https://careers.example/jobs/1', { client: client({}) });
+    assert.match(short.ok ? '' : short.reason, /too short/);
   });
 
   it('knows when a page is about this job', () => {

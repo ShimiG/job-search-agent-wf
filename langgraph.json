@@ -5,6 +5,7 @@
     "pipeline": "./src/graph/graphs.ts:pipeline",
     "scout": "./src/graph/graphs.ts:scout",
     "tailor": "./src/graph/graphs.ts:tailor",
-    "submitter": "./src/graph/graphs.ts:submitter"
+    "submitter": "./src/graph/graphs.ts:submitter",
+    "archiver": "./src/graph/graphs.ts:archiver"
   }
 }

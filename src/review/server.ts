@@ -7,19 +7,23 @@ import path from 'node:path';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { loadJsonFile, MasterCvSchema, PreferencesSchema, resolvePaths } from '../config.ts';
+import { addCertificate, CERTIFICATE_MAX_BYTES, CERTIFICATE_TYPES, certificateFile, listCertificates, removeCertificate, withCertificates } from '../cv/certificates.ts';
 import { importCv } from '../cv/import.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from '../cv/ready.ts';
-import { applyPicks, applyReview } from '../decisions.ts';
+import { applyPicks, applyReview, removeJob } from '../decisions.ts';
 import { JobStore } from '../db/store.ts';
 import { scoutAgent, sendWithoutReview, submitAgent, tailorAgent } from '../graph/graphs.ts';
 import { CostMeter } from '../llm/cost.ts';
 import { AnthropicEnricher, enrichCost } from '../llm/enrich.ts';
-import { checkApplyPage, postingFromLink } from '../llm/posting.ts';
-import { AnthropicScorer } from '../llm/scorer.ts';
+import { checkApplyPage, pastedPosting, postingFromLink } from '../llm/posting.ts';
+import { createScorer } from '../llm/scorer.ts';
 import { sweepAppliedListings } from '../pipeline/applied.ts';
+import { addManualJob } from '../pipeline/manual.ts';
 import { outcomeReport, WAITING_DAYS } from '../pipeline/outcomes.ts';
-import { cutoff } from '../pipeline/run.ts';
+import { placeByScore, resortByCutoff } from '../pipeline/run.ts';
 import { spendingReport } from '../pipeline/spending.ts';
+import { saveShortlistCutoff, shortlistCutoff } from '../settings.ts';
+import { ARCHIVE_AFTER_DAYS, buildReport, groupApplications, isArchived, STAGES } from '../archiver/report.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
 import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts';
@@ -298,11 +302,11 @@ async function state() {
       return null;
     }
   })();
-  const recent = Date.now() - 14 * 86_400_000;
   return {
     ...conn,
     autoSubmitAllowed: Boolean(settings?.autoSubmit),
     requireApproval: settings?.requireApproval ?? true,
+    shortlistCutoff: shortlistCutoff(loadJsonFile(resolvePaths().preferences, PreferencesSchema)),
     cv: cvStatus(),
     tasks: tasks.filter((t) => !t.done || (t.error && Date.now() - Date.parse(t.startedAt) < 3_600_000)),
     ...withStore((store) => ({
@@ -313,12 +317,6 @@ async function state() {
       sending: store
         .listByStatus(['approved', 'needs_manual', 'failed'])
         .map((j) => ({ ...view(j), docs: documents(store, j), last: lastAttempt(store, j), spent: spentOn(store, j.id) })),
-      sent: store
-        .listByStatus(['submitted'])
-        .map((j) => ({ job: j, last: lastAttempt(store, j) }))
-        .filter((x) => x.last?.outcome === 'submitted' && Date.parse(x.last.at) > recent)
-        .map((x) => ({ ...view(x.job), last: x.last, spent: spentOn(store, x.job.id) })),
-      results: { ...outcomeReport(store), waitingDays: WAITING_DAYS, spending: spendingReport(store) },
     })),
   };
 }
@@ -356,15 +354,103 @@ function setSubmitSetting(key: string, value: boolean) {
 function cvSummary() {
   const paths = resolvePaths();
   const contact = existsSync(paths.tailor) ? loadJsonFile(paths.tailor, TailorConfigSchema).contact : null;
-  if (!existsSync(paths.masterCv)) return { exists: false, path: paths.masterCv, contact };
+  const certificates = listCertificates(paths.certificatesDir);
+  if (!existsSync(paths.masterCv)) return { exists: false, path: paths.masterCv, contact, certificates };
   const raw = readFileSync(paths.masterCv, 'utf8');
   const cv = MasterCvSchema.parse(JSON.parse(raw));
-  return { exists: true, path: paths.masterCv, contact, todos: (raw.match(/TODO/g) ?? []).length, cv };
+  return { exists: true, path: paths.masterCv, contact, todos: (raw.match(/TODO/g) ?? []).length, cv, certificates };
 }
 
 const DOC_MAX_BYTES = 10 * 1024 * 1024;
 
+/** How the Submitter sent an application (its confirmation, what Claude wrote on the form), if it did. */
+function sentByTool(store: JobStore, ids: number[]) {
+  for (const id of ids) {
+    const job = store.get(id);
+    const last = job && lastAttempt(store, job);
+    if (last?.outcome === 'submitted') return { at: last.at, confirmation: last.confirmation, modelAnswers: last.modelAnswers };
+  }
+  return null;
+}
+
+/** The CV and cover letter of whichever of an application's job records was tailored. */
+function documentsOf(store: JobStore, ids: number[]) {
+  for (const id of ids) {
+    const job = store.get(id);
+    const docs = job && documents(store, job);
+    if (docs) return { jobId: id, cv: docs.cv, letter: docs.letter, version: docs.version };
+  }
+  return null;
+}
+
+/**
+ * The Archiver's report, plus when it last ran: what the Applied and Stats tabs and the Archive in
+ * Settings show. Each application says whether it's archived (rejected, or nothing new for 30 days).
+ */
+function applicationsView() {
+  return withStore((store) => {
+    const now = new Date();
+    const report = buildReport(store.sentApplications(), store.responses(), now);
+    const last = store.latestRun('archiver');
+    const strip = (r: { kind: string; receivedAt: string; subject: string; summary: string; action: string; fromName: string; company: string }) => ({
+      kind: r.kind, receivedAt: r.receivedAt, subject: r.subject, summary: r.summary, action: r.action, from: r.company || r.fromName,
+    });
+    return {
+      stats: report.stats,
+      archiveAfterDays: ARCHIVE_AFTER_DAYS,
+      rows: report.rows.map((r) => ({ ...r, replies: r.replies.map(strip), docs: documentsOf(store, r.jobIds), sent: sentByTool(store, r.jobIds), archived: isArchived(r, now) })),
+      // Applications never sent and moved here after two weeks without a change.
+      notSent: store.listByStatus(['archived']).map((j) => ({ ...view(j), docs: documentsOf(store, [j.id]), archivedAt: store.history(j.id).at(-1)?.at ?? null })),
+      unmatched: report.unmatched.map(strip),
+      lastRun: last ? { startedAt: last.startedAt, finishedAt: last.finishedAt } : null,
+      // For Stats: the same applications by where Scout found them and by score, and what Claude has cost.
+      breakdown: { ...outcomeReport(store, now), waitingDays: WAITING_DAYS },
+      spending: spendingReport(store, now),
+    };
+  });
+}
+
 const actions: Record<string, (body: unknown) => Promise<unknown>> = {
+  /**
+   * Sets an application's stage by hand, or with "auto" goes back to reading it from email. Applies to
+   * every record of the application, so Applied, Stats and the Archive agree.
+   */
+  async setStage(body) {
+    const { id, stage } = z.object({ id: z.number().int().positive(), stage: z.enum(['auto', ...STAGES]) }).parse(body);
+    return withStore((store) => {
+      const group = groupApplications(store.sentApplications()).find((g) => g.jobIds.includes(id));
+      if (!group) throw new Error(`#${id} isn't a sent application`);
+      const now = new Date().toISOString();
+      store.setOutcome(group.jobIds, stage === 'auto' ? null : stage, now);
+      // Rejected by you: to the Archive, even one you'd kept in Applied.
+      if (stage === 'rejected') store.setArchiveChoice(group.jobIds, null, now);
+      return { ids: group.jobIds };
+    });
+  },
+  /** "Send to archive" on an Applied card, or "Back to Applied" on an archived one. */
+  async archiveApplication(body) {
+    const { id, archive } = z.object({ id: z.number().int().positive(), archive: z.boolean() }).parse(body);
+    return withStore((store) => {
+      const group = groupApplications(store.sentApplications()).find((g) => g.jobIds.includes(id));
+      if (!group) throw new Error(`#${id} isn't a sent application`);
+      store.setArchiveChoice(group.jobIds, archive ? 'archived' : 'applied', new Date().toISOString());
+      return { ids: group.jobIds, archived: archive };
+    });
+  },
+
+  /** Puts an auto-archived application back where it was. */
+  async restore(body) {
+    const { id } = z.object({ id: z.number().int().positive() }).parse(body);
+    return { status: withStore((store) => store.restoreArchived(id, new Date().toISOString())) };
+  },
+  /** Runs the Archiver now instead of waiting for its hourly run. */
+  async archive() {
+    const last = withStore((store) => store.latestRun('archiver'));
+    if (last && !last.finishedAt && Date.now() - Date.parse(last.startedAt) < 2 * 3_600_000) return { started: false };
+    const child = spawn(process.execPath, ['--import', 'tsx', path.join(process.cwd(), 'src', 'cli.ts'), 'archive'], { cwd: process.cwd(), stdio: 'ignore', detached: true });
+    child.on('error', () => undefined).unref();
+    return { started: true };
+  },
   /** Converts an uploaded CV (PDF or Word) for preview. Nothing is saved yet. */
   async cvParse(body) {
     const { data } = z.object({ name: z.string().max(300), data: z.string().max(Math.ceil((DOC_MAX_BYTES * 4) / 3) + 8) }).parse(body);
@@ -406,6 +492,34 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     return { requireApproval };
   },
 
+  /** The minimum score for your shortlist: saved to config/preferences.json and applied to the jobs already scored. */
+  async shortlistCutoff(body) {
+    const paths = resolvePaths();
+    const prefs = saveShortlistCutoff(paths.preferences, body);
+    const moved = withStore((store) => resortByCutoff(store, prefs, new Date().toISOString()));
+    return { ...shortlistCutoff(prefs), ...moved };
+  },
+
+  /** A certificate you upload, with its title (and issuer, year) as it should read on your CV. */
+  async certificateAdd(body) {
+    const { name, data, title, issuer, year } = z
+      .object({
+        name: z.string().max(300),
+        data: z.string().max(Math.ceil((CERTIFICATE_MAX_BYTES * 4) / 3) + 8),
+        title: z.string().max(200),
+        issuer: z.string().max(200).default(''),
+        year: z.string().max(10).default(''),
+      })
+      .parse(body);
+    return addCertificate(resolvePaths().certificatesDir, { data: Buffer.from(data, 'base64'), originalName: name, title, issuer, year });
+  },
+
+  async certificateRemove(body) {
+    const { id } = z.object({ id: z.string().max(40) }).parse(body);
+    if (!removeCertificate(resolvePaths().certificatesDir, id)) throw new Error('No such certificate');
+    return { removed: id };
+  },
+
   async run(body) {
     const { mode } = z.object({ mode: Mode }).parse(body);
     if (!cvStatus().ready) throw new Error(UPLOAD_CV_FIRST);
@@ -431,6 +545,12 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     const { picked, skipped } = withStore((store) => applyPicks(store, { pick: ids }));
     if (picked.length) await startTailor(up, picked, mode);
     return { via: up ? 'langgraph' : 'local', picked, skipped };
+  },
+
+  /** "Remove" on a card: the job leaves every list, whatever stage it's at. */
+  async remove(body) {
+    const { id } = z.object({ id: z.number().int().positive() }).parse(body);
+    return withStore((store) => removeJob(store, id));
   },
 
   async dismiss(body) {
@@ -492,7 +612,9 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     if (!result.applyUrl) return { found: false, reason: result.reason, cost };
     withStore((store) => {
       store.setApplyUrl(id, result.applyUrl!, now);
-      if (store.get(id)!.status === 'failed') store.setStatus(id, 'approved', 'application page found', 'user', now);
+      // Back to approved: the Submitter only takes approved jobs in Auto mode, so a job left in
+      // needs_manual (LinkedIn, no form found) would otherwise be skipped without a word.
+      if (['failed', 'needs_manual'].includes(store.get(id)!.status)) store.setStatus(id, 'approved', `application page found: ${result.applyUrl}`, 'user', now);
     });
     const { langgraph: up } = await connection();
     await start('submit', up, [id], { jobIds: [id], mode }, () => submitAgent([id], mode));
@@ -522,7 +644,11 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
         if (page.closed) withStore((store) => store.markClosed(id, `no longer accepting applications (${url})`, now()));
         return { ...page, cost: 0 };
       }
-      withStore((store) => store.setApplyUrl(id, page.finalUrl, now()));
+      withStore((store) => {
+        store.setApplyUrl(id, page.finalUrl, now());
+        // A job stuck in Sending goes back to approved, or Auto mode skips it as "waiting for you".
+        if (job.status !== 'tailored') store.setStatus(id, 'approved', `where to apply, pasted by you: ${page.finalUrl}`, 'user', now());
+      });
       const sent = job.status === 'tailored' ? await actions.approve!({ ids: [id], force, mode }) : await actions.retry!({ ids: [id], mode });
       return { ok: true, stage: 'send', applyUrl: page.finalUrl, mode, cost: 0, sent };
     }
@@ -545,11 +671,18 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     try {
       const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
       const full = withStore((store) => store.get(id)!);
-      const scored = await metered((meter) =>
-        new AnthropicScorer({ cv: loadJsonFile(paths.masterCv, MasterCvSchema), prefs, model: process.env.SCOUT_MODEL, meter }).score(full),
-      );
+      const { scored, scorer } = await metered(async (meter) => {
+        const scorer = createScorer({
+          cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir),
+          prefs,
+          model: process.env.SCOUT_MODEL,
+          examples: () => withStore((store) => store.listClaudeScored()),
+          meter,
+        });
+        return { scored: await scorer.score(full), scorer };
+      });
       score = scored.score;
-      withStore((store) => store.saveScore(id, scored, scored.score >= cutoff(full, prefs) ? 'shortlisted' : 'low_score', now()));
+      withStore((store) => store.saveScore(id, scored, placeByScore(full, scored.score, prefs), now(), scorer.model ?? null));
     } catch {
       // Scoring is a nicety here: the posting is saved and tailoring goes ahead regardless.
     }
@@ -557,6 +690,56 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
     const { langgraph: up } = await connection();
     await startTailor(up, [id], mode);
     return { ok: true, stage: 'tailor', title: p.title, score, cost: result.cost, mode };
+  },
+
+  /**
+   * A job you add from its link. Without a description the posting is read off the page; with one, your
+   * text is the posting and the link is only where the Submitter applies. Either way it's scored onto
+   * your shortlist ("score") or goes straight to the Tailor, unscored ("tailor").
+   */
+  async addJob(body) {
+    const { url, description, next, mode } = z
+      .object({ url: z.string().trim().min(8).max(2000), description: z.string().max(60_000).default(''), next: z.enum(['score', 'tailor']).default('score'), mode: Mode })
+      .parse(body);
+    if (!cvStatus().ready) throw new Error(UPLOAD_CV_FIRST);
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set in .env');
+    const paths = resolvePaths();
+    const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
+    const settings = existsSync(paths.submit) ? loadJsonFile(paths.submit, SubmitFileSchema) : null;
+    const model = process.env.ENRICH_MODEL ?? process.env.TAILOR_MODEL;
+    const store = new JobStore(paths.db);
+    let result;
+    try {
+      console.log(`Add a job: ${url}${description.trim() ? ' with a description' : ''}, then ${next}`);
+      // What reading the posting and scoring it cost is saved as it happens.
+      const meter = new CostMeter('review');
+      meter.attach(store);
+      result = await addManualJob(
+        { url, description, next },
+        {
+          store,
+          prefs,
+          scorer: createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => store.listClaudeScored(), meter }),
+          readPage: (link) => postingFromLink(link, null, { model, browserPath: settings?.browserPath, meter }),
+          readPasted: (text, link) => pastedPosting(text, link, { model, meter }),
+        },
+      );
+    } catch (err) {
+      console.log(`Add a job: ${url} failed: ${(err as Error).message}`);
+      throw err;
+    } finally {
+      store.close();
+    }
+    console.log(
+      result.ok
+        ? `Add a job: added #${result.id} ${result.company} — ${result.title}, ${result.next === 'tailor' ? 'to the Tailor' : result.score !== null ? `score ${result.score}` : `not scored: ${result.scoreError}`}`
+        : `Add a job: not added: ${result.reason}`,
+    );
+    if (result.ok && result.next === 'tailor') {
+      const { langgraph: up } = await connection();
+      await startTailor(up, [result.id], mode);
+    }
+    return { ...result, mode };
   },
 
   /** You applied yourself (on LinkedIn, say): record it so nothing applies again. */
@@ -621,14 +804,28 @@ async function readJson(req: IncomingMessage, limit = 100_000): Promise<unknown>
 const FILE_TYPES: Record<string, string> = { '.pdf': 'application/pdf', '.html': 'text/html', '.md': 'text/plain', '.png': 'image/png' };
 
 /** A file from a job's application folder (CV, letter, report, screenshot), and nothing outside it. */
-function serveFile(res: ServerResponse, jobId: number, rel: string) {
+function serveFile(res: ServerResponse, jobId: number, rel: string, download = false) {
   const dir = withStore((store) => store.latestApplication(jobId)?.dir);
   const type = FILE_TYPES[path.extname(rel).toLowerCase()];
   if (!dir || !type) return send(res, 404, { error: 'not found' });
   const file = path.resolve(dir, rel);
   if (!file.startsWith(path.resolve(dir) + path.sep) || !existsSync(file)) return send(res, 404, { error: 'not found' });
   // Tailored HTML is your own CV, but it's still served without scripts.
-  res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'content-security-policy': "script-src 'none'" });
+  const headers: Record<string, string> = { 'content-type': type, 'cache-control': 'no-store', 'content-security-policy': "script-src 'none'" };
+  if (download) headers['content-disposition'] = `attachment; filename="${path.basename(file).replace(/[^\w.\- ]/g, '_')}"`;
+  res.writeHead(200, headers);
+  res.end(readFileSync(file));
+}
+
+/** One of your certificates, by id from the index: never a path from the request. */
+function serveCertificate(res: ServerResponse, id: string, download: boolean) {
+  const dir = resolvePaths().certificatesDir;
+  const cert = listCertificates(dir).find((c) => c.id === id);
+  const file = cert && certificateFile(dir, cert);
+  if (!cert || !file || !existsSync(file)) return send(res, 404, { error: 'not found' });
+  const headers: Record<string, string> = { 'content-type': CERTIFICATE_TYPES[cert.type].mime, 'cache-control': 'no-store', 'content-security-policy': "script-src 'none'" };
+  if (download) headers['content-disposition'] = `attachment; filename="${cert.originalName.replace(/[^\w.\- ]/g, '_')}"`;
+  res.writeHead(200, headers);
   res.end(readFileSync(file));
 }
 
@@ -654,11 +851,14 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') return send(res, 200, PAGE, 'text/html');
     if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, await state());
     if (req.method === 'GET' && url.pathname === '/api/cv') return send(res, 200, cvSummary());
+    if (req.method === 'GET' && url.pathname === '/api/applications') return send(res, 200, applicationsView());
     if (req.method === 'GET' && url.pathname === '/api/below-cutoff') {
       return send(res, 200, withStore((store) => store.listByStatus(['low_score']).map(view)));
     }
+    const cert = /^\/certificates\/([\w-]+)$/.exec(url.pathname);
+    if (req.method === 'GET' && cert) return serveCertificate(res, cert[1]!, url.searchParams.has('download'));
     const file = /^\/files\/(\d+)\/(.+)$/.exec(url.pathname);
-    if (req.method === 'GET' && file) return serveFile(res, Number(file[1]), decodeURIComponent(file[2]!));
+    if (req.method === 'GET' && file) return serveFile(res, Number(file[1]), decodeURIComponent(file[2]!), url.searchParams.has('download'));
     const action = /^\/api\/(\w+)$/.exec(url.pathname)?.[1];
     if (req.method === 'POST' && action && actions[action]) {
       // Only this page may act: another site open in your browser can't post here.
@@ -667,7 +867,8 @@ const server = createServer(async (req, res) => {
       if (!sameSite || !(req.headers['content-type'] ?? '').startsWith('application/json')) {
         return send(res, 403, { error: 'forbidden' });
       }
-      return send(res, 200, await actions[action]!(await readJson(req, action === 'cvParse' ? 15_000_000 : 1_000_000)));
+      const limit = action === 'cvParse' ? 15_000_000 : action === 'certificateAdd' ? 8_000_000 : 1_000_000;
+      return send(res, 200, await actions[action]!(await readJson(req, limit)));
     }
     send(res, 404, { error: 'not found' });
   } catch (err) {
