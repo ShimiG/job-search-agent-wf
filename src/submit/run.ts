@@ -10,7 +10,7 @@ import { sleep } from '../util/limiter.ts';
 import type { Logger } from '../util/logger.ts';
 import { buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type Documents } from './answers.ts';
 import { detectBlockers, detectConfirmation, extractFields, fillAnswer, fillCode, findCodeFields, findFormFrame, findSubmitButton, guardSubmit, highlight, pageMentionsTitle, revealForm } from './form.ts';
-import { applyMapped, type FieldMapper } from './llm.ts';
+import { mapWithRetry, type FieldMapper } from './llm.ts';
 import type { CodeSource } from './otp.ts';
 import { MODEL_SOURCES, type AnswersConfig, type PlannedAnswer, type SubmitConfig, type SubmitMode } from './schema.ts';
 
@@ -249,15 +249,20 @@ export async function submitJob(job: JobRow, mode: SubmitMode, deps: SubmitDeps)
     const ask = forModel(plan);
     if (ask.length && deps.mapper) {
       try {
-        const mapped = await deps.mapper.map({
-          fields: formFields.filter((f) => ask.some((a) => a.key === f.key)),
-          job: { title: job.title, company: job.company, location: job.location },
-          profile,
-          answers: deps.answers,
-          cv: deps.cv,
-          tailored,
-        });
-        applyMapped(plan, formFields, new Set(ask.map((a) => a.key)), mapped);
+        const { retried, recovered } = await mapWithRetry(
+          deps.mapper,
+          {
+            fields: formFields.filter((f) => ask.some((a) => a.key === f.key)),
+            job: { title: job.title, company: job.company, location: job.location },
+            profile,
+            answers: deps.answers,
+            cv: deps.cv,
+            tailored,
+          },
+          plan,
+          formFields,
+        );
+        if (retried) logger.info(`#${job.id}: asked again about ${retried} answer(s) that didn't fit the form; ${recovered} now do`);
       } catch (err) {
         logger.warn(`#${job.id}: model could not help with ${ask.length} question(s): ${(err as Error).message}`);
       }

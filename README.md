@@ -385,8 +385,11 @@ company-site forms, including iframes and forms behind an "Apply" button. Answer
 the tailored PDFs; your **answer bank** in `config/submit.json` (an empty answer means "always ask
 me"); policies (demographic questions declined; consent boxes only with `consentToPrivacyPolicies`);
 your profile (name, email, phone, city, links); and finally the model, which may copy facts from your CV
-and draft short answers like "Why us?". Autocomplete fields (city, country) are filled by picking from
-their suggestions, and the form can't be submitted while it's being filled.
+and draft short answers like "Why us?". A model answer is used only if it fits the form: a choice must
+be one of the field's options and text must fit its length limit. One that doesn't is sent back once,
+with the reason, for a second try; if that fails too, the field is left for you. Autocomplete fields
+(city, country) are filled by picking from their suggestions, and the form can't be submitted while
+it's being filled.
 
 **Security codes:** when a site (Greenhouse, typically) emails a code after you click Submit, the
 Submitter reads it from your inbox, enters it and submits again.
