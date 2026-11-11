@@ -14,11 +14,16 @@ type DedupeFields = Pick<JobRow, 'id' | 'source' | 'normTitle' | 'location' | 'd
  * Same title + same board + different location is usually a genuinely separate opening.
  */
 export function isSameJob(a: DedupeFields, b: DedupeFields): boolean {
-  if (diceSimilarity(a.normTitle, b.normTitle) < TITLE_SIMILARITY_THRESHOLD) return false;
-  // "Software Engineer II" vs "III" is a near-perfect string match but a different job.
-  if (levelTokens(a.normTitle) !== levelTokens(b.normTitle)) return false;
+  if (!isSameTitle(a.normTitle, b.normTitle)) return false;
   if (a.source !== b.source) return true;
   return normalizeForMatch(a.location) === normalizeForMatch(b.location);
+}
+
+/** Near-identical normalized titles at the same level. */
+export function isSameTitle(a: string, b: string): boolean {
+  if (diceSimilarity(a, b) < TITLE_SIMILARITY_THRESHOLD) return false;
+  // "Software Engineer II" vs "III" is a near-perfect string match but a different job.
+  return levelTokens(a) === levelTokens(b);
 }
 
 const LEVEL_TOKENS = new Set([

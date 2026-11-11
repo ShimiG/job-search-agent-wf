@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, loadJsonFile, resolvePaths } from '../config.ts';
 import { JobStore } from '../db/store.ts';
+import { sweepAppliedListings } from '../pipeline/applied.ts';
 import type { JobStatus } from '../types.ts';
 import { createLogger } from '../util/logger.ts';
 import { AnthropicTailor } from './llm.ts';
@@ -160,6 +161,7 @@ async function main() {
         } else if (command === 'reject') {
           if (!['tailored', 'selected', 'tailor_error', 'approved'].includes(job.status)) throw new ConfigError(`#${id} is "${job.status}".`);
           db.setStatus(id, 'dismissed', 'rejected at review', 'user', now);
+          sweepAppliedListings(db, now);
           console.log(`#${id}: dismissed.`);
         } else {
           if (!values.note) throw new ConfigError('Say what to change: redo <id> --note "lead with the integration work"');

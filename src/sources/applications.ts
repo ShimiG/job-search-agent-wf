@@ -1,6 +1,7 @@
 import { convert } from 'html-to-text';
 import type { ImapCredentials, SourcesConfig } from '../config.ts';
 import { normalizeForMatch } from '../util/text.ts';
+import { parseReplyEmail, type ReplyEmail } from './replies.ts';
 
 /*
  * Applications you sent yourself (LinkedIn Easy Apply, Indeed, a company's careers page) each leave
@@ -144,17 +145,49 @@ export function parseAppliedEmail(mail: RawEmail): AppliedEmail | null {
   return { ...base, via: 'company', company, title };
 }
 
-/** What Scout calls each run, or undefined when email reading or application tracking is off. */
-export function appliedEmailsSource(
+/** What Scout calls each run. Both read the inbox once, together; either is undefined when turned off. */
+export function applicationMailSource(
   emailAlerts: SourcesConfig['emailAlerts'],
   credentials: ImapCredentials | null,
-): (() => Promise<AppliedEmail[]>) | undefined {
-  if (!emailAlerts.enabled || !emailAlerts.trackApplications || !credentials) return undefined;
-  return () => fetchAppliedEmails(credentials, { mailbox: emailAlerts.mailbox, sinceDays: emailAlerts.applicationsSinceDays });
+): { applied?: () => Promise<AppliedEmail[]>; replies?: () => Promise<ReplyEmail[]> } {
+  if (!emailAlerts.enabled || !credentials) return {};
+  const { trackApplications, trackReplies } = emailAlerts;
+  if (!trackApplications && !trackReplies) return {};
+  let mail: Promise<ApplicationMail> | undefined;
+  const read = () =>
+    (mail ??= fetchApplicationMail(credentials, {
+      mailbox: emailAlerts.mailbox,
+      appliedSinceDays: trackApplications ? emailAlerts.applicationsSinceDays : null,
+      repliesSinceDays: trackReplies ? emailAlerts.repliesSinceDays : null,
+    }));
+  return {
+    ...(trackApplications ? { applied: async () => (await read()).applied } : {}),
+    ...(trackReplies ? { replies: async () => (await read()).replies } : {}),
+  };
 }
 
-/** Confirmation emails from the last `sinceDays` days. Searches are narrow, so this stays cheap. */
-export async function fetchAppliedEmails(credentials: ImapCredentials, opts: { mailbox: string; sinceDays: number }): Promise<AppliedEmail[]> {
+export interface ApplicationMail {
+  applied: AppliedEmail[];
+  replies: ReplyEmail[];
+}
+
+/** IMAP searches (Gmail matches whole words) that find confirmations, and replies about applications. */
+const APPLIED_SEARCHES = [{ subject: 'application' }, { subject: 'applying' }, { body: 'received your application' }, { body: 'for applying' }];
+const REPLY_SEARCHES = [
+  { subject: 'application' }, { subject: 'interview' }, { subject: 'next steps' }, { subject: 'assignment' }, { subject: 'offer' },
+  { subject: 'מועמדות' }, { subject: 'ראיון' }, { subject: 'משרה' },
+  { body: 'interview' }, { body: 'availability' }, { body: 'unfortunately' }, { body: 'assignment' }, { body: 'regret' },
+  { body: 'ראיון' }, { body: 'לצערנו' }, { body: 'מטלת' },
+];
+
+/**
+ * Confirmation emails from the last `appliedSinceDays` days, and replies from the last `repliesSinceDays`
+ * (null skips either). Searches are narrow and every email is fetched once, so this stays cheap.
+ */
+export async function fetchApplicationMail(
+  credentials: ImapCredentials,
+  opts: { mailbox: string; appliedSinceDays: number | null; repliesSinceDays: number | null },
+): Promise<ApplicationMail> {
   const { ImapFlow } = await import('imapflow');
   const { simpleParser } = await import('mailparser');
   const client = new ImapFlow({
@@ -164,30 +197,42 @@ export async function fetchAppliedEmails(credentials: ImapCredentials, opts: { m
     auth: { user: credentials.user, pass: credentials.password },
     logger: false,
   });
-  const since = new Date(Date.now() - opts.sinceDays * 86_400_000);
-  const found: AppliedEmail[] = [];
+  const found: ApplicationMail = { applied: [], replies: [] };
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
   await client.connect();
   try {
     const lock = await client.getMailboxLock(opts.mailbox, { readOnly: true });
     try {
       const uids = new Set<number>();
-      for (const query of [{ subject: 'application' }, { subject: 'applying' }, { body: 'received your application' }, { body: 'for applying' }]) {
-        for (const uid of (await client.search({ since, ...query }, { uid: true })) || []) uids.add(uid);
+      const searches = [
+        ...(opts.appliedSinceDays ? APPLIED_SEARCHES.map((q) => ({ since: daysAgo(opts.appliedSinceDays!), ...q })) : []),
+        ...(opts.repliesSinceDays ? REPLY_SEARCHES.map((q) => ({ since: daysAgo(opts.repliesSinceDays!), ...q })) : []),
+      ];
+      for (const query of searches) {
+        for (const uid of (await client.search(query, { uid: true })) || []) uids.add(uid);
       }
       if (uids.size === 0) return found;
       for await (const msg of client.fetch([...uids], { source: true, envelope: true, internalDate: true }, { uid: true })) {
         if (!msg.source) continue;
         const mail = await simpleParser(msg.source);
         const from = msg.envelope?.from?.[0];
-        const parsed = parseAppliedEmail({
+        const raw = {
           fromName: from?.name ?? '',
           fromAddress: from?.address ?? '',
           subject: mail.subject ?? '',
           text: mail.text ?? '',
           html: typeof mail.html === 'string' ? mail.html : '',
           date: mail.date ?? new Date(msg.internalDate ?? Date.now()),
-        });
-        if (parsed) found.push(parsed);
+          messageId: mail.messageId,
+        };
+        if (opts.appliedSinceDays && raw.date >= daysAgo(opts.appliedSinceDays)) {
+          const applied = parseAppliedEmail(raw);
+          if (applied) found.applied.push(applied);
+        }
+        if (opts.repliesSinceDays && raw.date >= daysAgo(opts.repliesSinceDays)) {
+          const reply = parseReplyEmail(raw);
+          if (reply) found.replies.push(reply);
+        }
       }
     } finally {
       lock.release();

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { JobStore } from '../src/db/store.ts';
-import { recordApplications } from '../src/pipeline/applied.ts';
+import { normalizeJobUrl, recordApplications, sweepAppliedListings } from '../src/pipeline/applied.ts';
 import { decideDuplicate } from '../src/pipeline/dedupe.ts';
 import { parseAppliedEmail, type AppliedEmail, type RawEmail } from '../src/sources/applications.ts';
 import { makeJob, NOW } from './helpers.ts';
@@ -122,5 +122,95 @@ describe('recording applications', () => {
     const stats = recordApplications(store, [app({ via: 'indeed', title: 'AI Solution Manager' }), app({ via: 'indeed', title: 'Integration Engineer' })], NOW.toISOString());
     assert.deepEqual(stats, { matched: 1, added: 1 });
     assert.equal(store.get(only)!.status, 'submitted');
+  });
+});
+
+describe('removing listings of jobs you applied to', () => {
+  const add = (store: JobStore, over: Parameters<typeof makeJob>[0], status: Parameters<JobStore['setStatus']>[1]) => {
+    const { id } = store.upsert(makeJob(over), NOW.toISOString());
+    if (status !== 'discovered') store.setStatus(id, status, status === 'submitted' ? 'you applied on LinkedIn on 2026-10-12' : null, 'scout', NOW.toISOString());
+    return id;
+  };
+
+  it('takes other listings of an applied job off the shortlist and out of the queue, across boards and alert feeds', () => {
+    const store = new JobStore(':memory:');
+    const applied = add(store, { source: 'email', externalId: 'linkedin:1', company: 'Mize Ltd', title: 'AI Product Specialist', location: 'Tel Aviv-Yafo, Israel' }, 'submitted');
+    const shortlisted = add(store, { source: 'email', externalId: 'drushim:5', company: 'Mize', title: 'AI Product Specialist', location: 'תל אביב יפו', url: 'https://www.drushim.co.il/job/5/' }, 'shortlisted');
+    const repost = add(store, { source: 'greenhouse', externalId: 'mize:9', company: 'Mize', title: 'AI Product Specialist (m/f/d)', url: 'https://example.com/9' }, 'discovered');
+    const other = add(store, { source: 'greenhouse', externalId: 'mize:10', company: 'Mize', title: 'Senior AI Product Specialist', url: 'https://example.com/10' }, 'queued');
+
+    assert.deepEqual(sweepAppliedListings(store, NOW.toISOString()), { applied: 2, inProgress: 0, dismissed: 0 });
+    for (const id of [shortlisted, repost]) {
+      const job = store.get(id)!;
+      assert.equal(job.status, 'duplicate');
+      assert.equal(job.duplicateOf, applied);
+      assert.match(job.statusReason!, /you already applied to this job \(#\d+: you applied on LinkedIn/);
+    }
+    assert.equal(store.get(other)!.status, 'queued', 'a different level is a different job');
+    assert.deepEqual(sweepAppliedListings(store, NOW.toISOString()), { applied: 0, inProgress: 0, dismissed: 0 }, 'running again changes nothing');
+  });
+
+  it('matches the same job page whatever the company is called, and ignores tracking parameters', () => {
+    const store = new JobStore(':memory:');
+    add(store, { source: 'email', externalId: 'alljobs:7', company: 'חברה חסויה', title: 'מפתח/ת Full Stack', url: 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=7' }, 'submitted');
+    const again = add(
+      store,
+      { source: 'email', externalId: 'alljobs-2:7', company: 'Omega', title: 'Full Stack Developer', url: 'https://alljobs.co.il/Search/UploadSingle.aspx?utm_source=agent&JobID=7' },
+      'shortlisted',
+    );
+    sweepAppliedListings(store, NOW.toISOString());
+    assert.equal(store.get(again)!.status, 'duplicate');
+    assert.equal(normalizeJobUrl('https://acme.com/'), null, 'a home page is not a job page');
+  });
+
+  it('does not match two jobs whose web lookups both landed on the same careers page', () => {
+    const store = new JobStore(':memory:');
+    const a = add(store, { source: 'email', externalId: 'linkedin:1', company: 'Acme', title: 'Data Analyst', url: 'https://www.linkedin.com/jobs/view/1/' }, 'submitted');
+    const b = add(store, { source: 'email', externalId: 'linkedin:2', company: 'Acme', title: 'Solutions Architect', url: 'https://www.linkedin.com/jobs/view/2/' }, 'shortlisted');
+    const careers = 'https://acme.com/careers';
+    store.db.prepare('UPDATE jobs SET posting_url = ? WHERE id IN (?, ?)').run(careers, a, b);
+    sweepAppliedListings(store, NOW.toISOString());
+    assert.equal(store.get(b)!.status, 'shortlisted');
+
+    // A board listing whose own page is the one the lookup found is the same job.
+    const page = add(store, { externalId: 'acme:7', company: 'Acme Inc', title: 'Analyst, Data', url: careers }, 'queued');
+    sweepAppliedListings(store, NOW.toISOString());
+    assert.equal(store.get(page)!.duplicateOf, a);
+  });
+
+  it('keeps a same-board opening in another city, and files jobs being applied to separately', () => {
+    const store = new JobStore(':memory:');
+    add(store, { externalId: 'acme:1', title: 'Automation Engineer', location: 'Tel Aviv', url: 'https://example.com/1' }, 'submitted');
+    const haifa = add(store, { externalId: 'acme:2', title: 'Automation Engineer', location: 'Haifa', url: 'https://example.com/2' }, 'shortlisted');
+    const approved = add(store, { externalId: 'acme:3', title: 'Integration Engineer', url: 'https://example.com/3' }, 'approved');
+    const alert = add(store, { source: 'email', externalId: 'linkedin:3', title: 'Integration Engineer', url: 'https://www.linkedin.com/jobs/view/3/' }, 'shortlisted');
+    assert.deepEqual(sweepAppliedListings(store, NOW.toISOString()), { applied: 0, inProgress: 1, dismissed: 0 });
+    assert.equal(store.get(haifa)!.status, 'shortlisted');
+    assert.equal(store.get(alert)!.duplicateOf, approved);
+    assert.match(store.get(alert)!.statusReason!, /already being applied to as #\d+ \(approved\)/);
+  });
+
+  it('hides other listings of a job you dismissed, but files a job you also applied to under the application', () => {
+    const store = new JobStore(':memory:');
+    const dismissed = add(store, { source: 'email', externalId: 'linkedin:5', company: 'Grain', title: 'AI Builder', url: 'https://www.linkedin.com/jobs/view/5/' }, 'dismissed');
+    const board = add(store, { source: 'greenhouse', externalId: 'grain:1', company: 'Grain', title: 'AI Builder', url: 'https://example.com/g1' }, 'discovered');
+    const applied = add(store, { externalId: 'beta:1', company: 'Beta', title: 'Integration Engineer', url: 'https://example.com/b1' }, 'submitted');
+    add(store, { source: 'email', externalId: 'linkedin:6', company: 'Beta', title: 'Integration Engineer', url: 'https://www.linkedin.com/jobs/view/6/' }, 'dismissed');
+    const third = add(store, { source: 'email', externalId: 'drushim:6', company: 'Beta', title: 'Integration Engineer', url: 'https://www.drushim.co.il/job/6/' }, 'shortlisted');
+
+    assert.deepEqual(sweepAppliedListings(store, NOW.toISOString()), { applied: 1, inProgress: 0, dismissed: 1 });
+    assert.equal(store.get(board)!.duplicateOf, dismissed);
+    assert.match(store.get(board)!.statusReason!, /you dismissed this job \(#\d+\)/);
+    assert.equal(store.get(third)!.duplicateOf, applied);
+  });
+
+  it("matches Indeed applications, which don't name the company, to the one Indeed listing with that title", () => {
+    const store = new JobStore(':memory:');
+    recordApplications(store, [{ company: '', title: 'AI Solution Manager', via: 'indeed', appliedAt: '2026-10-12T09:00:00.000Z', rejected: false, subject: 'Indeed Application: AI Solution Manager' }], NOW.toISOString());
+    const later = add(store, { source: 'email', externalId: 'indeed:abc', company: 'Acme', title: 'AI Solution Manager' }, 'discovered');
+    const elsewhere = add(store, { source: 'greenhouse', externalId: 'beta:1', company: 'Beta', title: 'AI Solution Manager' }, 'queued');
+    sweepAppliedListings(store, NOW.toISOString());
+    assert.equal(store.get(later)!.status, 'duplicate');
+    assert.equal(store.get(elsewhere)!.status, 'queued', 'another company, not from Indeed');
   });
 });
