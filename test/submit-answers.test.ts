@@ -24,6 +24,9 @@ describe('platforms', () => {
   it('detects manual-only sites and resolves apply URLs', () => {
     assert.ok(detectPlatform('https://www.linkedin.com/jobs/view/1/').manualOnly);
     assert.ok(detectPlatform('https://acme.wd3.myworkdayjobs.com/en-US/careers/job/1').manualOnly);
+    for (const board of ['https://www.jobmaster.co.il/jobs/checknum.asp?key=1', 'https://www.ziprecruiter.com/ekm/AAA', 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID=1']) {
+      assert.ok(detectPlatform(board).manualOnly, board);
+    }
     assert.equal(detectPlatform('https://job-boards.greenhouse.io/acme/jobs/1').name, 'Greenhouse');
     assert.equal(detectPlatform('https://acme.com/careers?comeet_pos=F6.A12').name, 'Comeet');
     assert.equal(resolveApplyUrl({ source: 'lever', url: 'https://jobs.lever.co/beta/abc', applyUrl: undefined }), 'https://jobs.lever.co/beta/abc/apply');

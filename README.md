@@ -50,7 +50,8 @@ Requires Node.js 22+, Google Chrome (for PDFs and filling forms), and an
    ```bash
    npm run scout -- add-source https://job-boards.greenhouse.io/somecompany
    ```
-   and, optionally, alert emails from LinkedIn, Indeed, Drushim or AllJobs (see [Alert emails](#linkedin-indeed-and-israeli-job-board-alert-emails)).
+   and, optionally, alert emails from LinkedIn, Indeed, Drushim, AllJobs, JobMaster, ZipRecruiter and
+   Greenhouse boards (see [Alert emails](#linkedin-indeed-and-israeli-job-board-alert-emails)).
 6. **Try a free run first.** On the review page, or with
    `npm run scout -- run --no-score`, which fetches and filters without calling Claude. Check what
    gets through, adjust your preferences, then click **Run Scout** for a scored run.
@@ -156,10 +157,12 @@ LinkedIn and Indeed forbid automated access, but they email you alerts, and Scou
 3. Set `IMAP_USER` and `IMAP_PASSWORD` in `.env`, and `"emailAlerts": { "enabled": true }` in
    `config/sources.json`.
 
-LinkedIn (saved-search alerts and "X is hiring" emails), Indeed, Drushim and AllJobs (its Hebrew "סוכן חכם"
-alerts) are built in. Hebrew cards are read too: buttons such as "שליחת קו״ח", job-type lines such as "משרה מלאה"
-and labelled fields such as "חברה:" / "מיקום:" are recognised. Add others
-under `emailAlerts.feeds` (capture group 1 of `linkPattern` must be the job ID):
+Seven are built in: LinkedIn (saved-search alerts and "X is hiring" emails), Indeed, Drushim, AllJobs
+(its Hebrew "סוכן חכם" alerts), JobMaster, ZipRecruiter, and job alerts from companies' Greenhouse boards.
+Hebrew cards are read too: buttons such as "שליחת קו״ח", job-type lines such as "משרה מלאה" and labelled
+fields such as "חברה:" / "מיקום:" are recognised. Add others under `emailAlerts.feeds` (capture group 1
+of `linkPattern` must be the job ID). When a board's links don't show the job's own address
+(ZipRecruiter's are click-tracking links), use `"urlTemplate": "{link}"` to keep the link as it is:
 
 ```json
 { "name": "examplejobs", "from": "example-jobs.com", "linkPattern": "example-jobs\\.com/job/(\\d+)", "urlTemplate": "https://example-jobs.com/job/{id}" }
@@ -468,7 +471,8 @@ application, at most 90 days):
 
 1. **Sender and subject only.** Alerts, security codes and newsletters are skipped. An email is read if
    its subject is about an application or interview (English or Hebrew), or it comes from a company you
-   applied to, an applicant tracking system, or a job board you apply through (Drushim, JobMaster).
+   applied to, an applicant tracking system (Greenhouse, Lever, Comeet…), LinkedIn's or Indeed's
+   application mail, or a job board you apply through (Drushim, JobMaster, AllJobs, ZipRecruiter).
    The boards' job alerts ("הסוכן החכם", "משרות חדשות"…) are still skipped. The first run after a board
    is added goes back once over its mail from the last 90 days.
 2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
@@ -479,10 +483,10 @@ application, at most 90 days):
    The same job sent through LinkedIn and the company site counts as one application. A reply with no
    application to file under (you applied yourself, and nothing recorded it) creates one: a
    confirmation, a rejection, an assessment, an interview or an offer all mean you applied, so the
-   application is recorded from the email, dated by it, as sent **from your email** (or **Drushim** /
-   **JobMaster** when the board's own confirmation says so, which gives each its own row under "By how
-   you applied" in Stats), and counts in the stats like any other. Only a reply naming a company or a role can be recorded; the rest stay listed
-   as unmatched in the report.
+   application is recorded from the email, dated by it, as sent **from your email** (or on **Drushim**,
+   **JobMaster**, **AllJobs** or **ZipRecruiter** when the board's own confirmation says so, which gives
+   each its own row under "By how you applied" in Stats), and counts in the stats like any other. Only a
+   reply naming a company or a role can be recorded; the rest stay listed as unmatched in the report.
 4. **Report.** The **Applications** tab on the review page and `data/applications-report.md`: applied,
    waiting, assessment, interview, offer and rejected counts; how many applications were sent with this
    tool and how many by you (the other figures cover both); response rate; how many reached an

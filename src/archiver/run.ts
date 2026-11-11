@@ -6,7 +6,8 @@ import { ollamaHasModel, ollamaModel } from '../llm/ollama.ts';
 import { emailBodyText, type RawEmail } from '../sources/applications.ts';
 import type { Logger } from '../util/logger.ts';
 import { normalizeCompany } from '../util/text.ts';
-import { classifyEmail, JOB_BOARDS, worthReading } from './classify.ts';
+import { JOB_BOARDS } from '../sources/job-boards.ts';
+import { classifyEmail, worthReading } from './classify.ts';
 import { fileReply } from './record.ts';
 import { buildReport, formatReport, groupApplications } from './report.ts';
 

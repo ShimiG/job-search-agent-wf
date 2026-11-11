@@ -74,7 +74,16 @@ describe('replies about applications you sent yourself', () => {
     assert.deepEqual(interview, { jobId: drushim.jobId, created: false });
   });
 
-  it('a job board confirmation for a confidential employer is recorded by its title alone', () => {
+  it('names every board an application can be recorded from', () => {
+    const senders: Array<[string, string, string]> = [['AllJobs', 'info@alljobs.co.il', 'Gamma'], ['ZipRecruiter', 'hello@ziprecruiter.com', 'Sigma']];
+    senders.forEach(([, fromAddress, company], i) =>
+      fileReply(store, reply({ fromAddress, company, title: `Engineer ${i}`, receivedAt: `2026-10-1${i}T09:00:00.000Z` }), rows(), NOW.toISOString()),
+    );
+    const via = new Map(store.sentApplications().map((a) => [a.job.company, a.via]));
+    assert.deepEqual(senders.map(([label, , company]) => [label, via.get(company)]), [['AllJobs', 'AllJobs'], ['ZipRecruiter', 'ZipRecruiter']]);
+  });
+
+    it('a job board confirmation for a confidential employer is recorded by its title alone', () => {
     const filed = fileReply(store, reply({ fromAddress: 'no-reply@jobmaster.co.il', company: '', title: 'Integration Engineer' }), rows(), NOW.toISOString());
     assert.ok(filed.created);
     assert.equal(store.sentApplications()[0]!.via, 'JobMaster');

@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
 import { describe, it } from 'node:test';
 import { DEFAULT_FEEDS, alertJobToNormalized, parseAlertEmail } from '../src/sources/email-alerts.ts';
+import { EmailFeedSchema } from '../src/config.ts';
 import { fixture } from './helpers.ts';
 
 const linkedin = DEFAULT_FEEDS.find((f) => f.name === 'linkedin')!;
 const drushim = DEFAULT_FEEDS.find((f) => f.name === 'drushim')!;
 const indeed = DEFAULT_FEEDS.find((f) => f.name === 'indeed')!;
 const alljobs = DEFAULT_FEEDS.find((f) => f.name === 'alljobs')!;
+const jobmaster = DEFAULT_FEEDS.find((f) => f.name === 'jobmaster')!;
+const ziprecruiter = DEFAULT_FEEDS.find((f) => f.name === 'ziprecruiter')!;
+const greenhouseAlerts = DEFAULT_FEEDS.find((f) => f.name === 'greenhouse-alerts')!;
 
 describe('alert email parser', () => {
   it('extracts one job per ID with title, company and location', () => {
@@ -106,6 +110,51 @@ describe('alert email parser', () => {
     assert.equal(jobs[0]!.id, '7654321');
     assert.equal(jobs[0]!.company, 'חברת דלתא');
     assert.equal(jobs[0]!.location, 'מרכז');
+  });
+
+  it('reads JobMaster alerts by the job key in the link', () => {
+    const html = `<table dir="rtl"><tr><td><a href="https://www.jobmaster.co.il/jobs/checknum.asp?key=9876543&utm_source=agent">מפתח/ת Backend</a></td></tr>
+      <tr><td>חברה: אומגה מערכות</td></tr><tr><td>אזור: תל אביב</td></tr>
+      <tr><td><a href="https://www.jobmaster.co.il/jobs/checknum.asp?key=9876543">לצפייה במשרה</a></td></tr></table>`;
+    assert.deepEqual(parseAlertEmail(html, jobmaster), [
+      { id: '9876543', title: 'מפתח/ת Backend', company: 'אומגה מערכות', location: 'תל אביב', url: 'https://www.jobmaster.co.il/jobs/checknum.asp?key=9876543' },
+    ]);
+  });
+
+  it("keeps ZipRecruiter's tracking link as the job's address, and skips buttons and footer links", () => {
+    const link = (token: string, text: string) => `<a href="https://www.ziprecruiter.com/ekm/${token}">${text}</a>`;
+    const html = `<table><tr><td>${link('AAAbbbCCC111222333xyz', 'Integration Engineer')}<div>Acme Robotics</div><div>Tel Aviv, Israel</div>${link('AAAbbbCCC111222333xyz', '1-Click Apply')}</td></tr>
+      <tr><td>${link('ZZZyyyXXX999888777abc', 'Backend Developer')}<div>Beta Labs · Remote</div></td></tr>
+      <tr><td>${link('FOOTERfooter0000000001', 'View All Jobs')} ${link('FOOTERfooter0000000002', 'Unsubscribe')} ${link('FOOTERfooter0000000003', 'Manage alerts')}</td></tr></table>`;
+    const jobs = parseAlertEmail(html, ziprecruiter);
+    assert.deepEqual(
+      jobs.map((j) => [j.title, j.company, j.location, j.url]),
+      [
+        ['Integration Engineer', 'Acme Robotics', 'Tel Aviv, Israel', 'https://www.ziprecruiter.com/ekm/AAAbbbCCC111222333xyz'],
+        ['Backend Developer', 'Beta Labs', 'Remote', 'https://www.ziprecruiter.com/ekm/ZZZyyyXXX999888777abc'],
+      ],
+    );
+    assert.equal(alertJobToNormalized(jobs[0]!, ziprecruiter).externalId, 'ziprecruiter:AAAbbbCCC111222333xyz');
+  });
+
+  it('reads Greenhouse job alerts, whether the job is on the board or on the company site', () => {
+    const html = `<div><div><a href="https://job-boards.greenhouse.io/acme/jobs/7012345?gh_src=alert">AI Automation Engineer</a><div>Tel Aviv</div></div>
+      <div><a href="https://careers.beta.com/open-roles?gh_jid=5599001">Solutions Engineer</a><div>Remote</div></div>
+      <div><a href="https://job-boards.greenhouse.io/acme">See all jobs at Acme</a></div></div>`;
+    const jobs = parseAlertEmail(html, greenhouseAlerts);
+    assert.deepEqual(
+      jobs.map((j) => [j.id, j.title, j.url]),
+      [
+        ['7012345', 'AI Automation Engineer', 'https://job-boards.greenhouse.io/acme/jobs/7012345?gh_src=alert'],
+        ['5599001', 'Solutions Engineer', 'https://careers.beta.com/open-roles?gh_jid=5599001'],
+      ],
+    );
+  });
+
+  it('has a feed for every board you get alerts from', () => {
+    assert.deepEqual(DEFAULT_FEEDS.map((f) => f.name), ['linkedin', 'indeed', 'drushim', 'alljobs', 'jobmaster', 'ziprecruiter', 'greenhouse-alerts']);
+    for (const f of DEFAULT_FEEDS) assert.doesNotThrow(() => EmailFeedSchema.parse(f), f.name);
+    assert.throws(() => EmailFeedSchema.parse({ name: 'x', from: 'x.com', linkPattern: 'x/(\\d+)', urlTemplate: 'https://x.com/job' }), /\{id\} or \{link\}/);
   });
 
   it('produces partial jobs with remote detection', () => {

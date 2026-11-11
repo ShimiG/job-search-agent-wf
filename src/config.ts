@@ -139,8 +139,11 @@ export const EmailFeedSchema = z.object({
   from: z.string().min(1),
   /** Regex for job links. Capture group 1 must be the job ID. */
   linkPattern: z.string().min(1),
-  /** Canonical job URL. {id} is replaced with the captured ID. */
-  urlTemplate: z.string().includes('{id}'),
+  /**
+   * Canonical job URL. {id} is replaced with the captured ID. Or "{link}": the link as it is in the
+   * email, for boards whose links don't show the job's own address (click-tracking links).
+   */
+  urlTemplate: z.string().refine((t) => t.includes('{id}') || t.includes('{link}'), 'must contain {id} or {link}'),
 });
 export type EmailFeed = z.infer<typeof EmailFeedSchema>;
 

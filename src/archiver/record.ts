@@ -1,6 +1,6 @@
 import type { JobStore, ResponseRecord } from '../db/store.ts';
 import { recordApplications } from '../pipeline/applied.ts';
-import { jobBoardOf } from './classify.ts';
+import { jobBoardOf } from '../sources/job-boards.ts';
 import { groupApplications, matchApplication } from './report.ts';
 
 type Reply = Pick<ResponseRecord, 'company' | 'title' | 'kind' | 'receivedAt' | 'subject' | 'fromName' | 'fromAddress'>;

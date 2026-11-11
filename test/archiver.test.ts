@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { jobBoardOf, worthReading } from '../src/archiver/classify.ts';
+import { worthReading } from '../src/archiver/classify.ts';
+import { jobBoardOf } from '../src/sources/job-boards.ts';
 import { ARCHIVE_AFTER_DAYS, buildReport, formatReport, groupApplications, isArchived, matchApplication } from '../src/archiver/report.ts';
 import { JobStore, type ResponseRecord, type SentApplication } from '../src/db/store.ts';
 import { markSubmitted } from '../src/submit/run.ts';
@@ -60,6 +61,18 @@ describe('archiver', () => {
     assert.equal(yes('JobMaster', 'no-reply@jobmaster.co.il', 'סוכן חכם: 5 משרות מחכות לך'), false);
     // Another sender with nothing about a job in the subject is still skipped.
     assert.equal(yes('Shop', 'deals@shop.co.il', 'עדכון חשוב'), false);
+
+    // AllJobs and ZipRecruiter the same way.
+    assert.equal(yes('AllJobs', 'info@alljobs.co.il', 'קורות החיים שלך נשלחו למעסיק'), true);
+    assert.equal(yes('AllJobs', 'info@alljobs.co.il', 'הסוכן החכם: משרות חדשות עבורך'), false);
+    assert.equal(yes('ZipRecruiter', 'hello@ziprecruiter.com', 'Acme Robotics viewed your application'), true);
+    assert.equal(yes('ZipRecruiter', 'hello@ziprecruiter.com', 'An update from Acme Robotics'), true);
+    assert.equal(yes('ZipRecruiter', 'alerts@ziprecruiter.com', 'New Integration Engineer jobs in Tel Aviv'), false);
+    assert.equal(yes('ZipRecruiter', 'alerts@ziprecruiter.com', 'Jobs you might like'), false);
+    assert.deepEqual(
+      ['a@alljobs.co.il', 'a@mail.ziprecruiter.com'].map((fromAddress) => jobBoardOf({ fromName: '', fromAddress })),
+      ['alljobs', 'ziprecruiter'],
+    );
 
     assert.equal(jobBoardOf({ fromName: '', fromAddress: 'noreply@drushim.co.il' }), 'drushim');
     assert.equal(jobBoardOf({ fromName: 'Job Master', fromAddress: 'x@sendgrid.net' }), 'jobmaster');

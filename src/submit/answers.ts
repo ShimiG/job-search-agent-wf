@@ -20,7 +20,8 @@ const MANUAL_ONLY: Array<[RegExp, string, string]> = [
   [/(^|\.)taleo\.net$/, 'Taleo', 'Taleo requires an account'],
   [/successfactors\.(com|eu)$/, 'SuccessFactors', 'SuccessFactors requires an account'],
   [/(^|\.)indeed\.com$/, 'Indeed', 'Indeed forbids automated applications'],
-  [/(^|\.)drushim\.co\.il$|(^|\.)alljobs\.co\.il$/, 'Israeli job board', 'apply on the job board itself'],
+  [/(^|\.)drushim\.co\.il$|(^|\.)alljobs\.co\.il$|(^|\.)jobmaster\.co\.il$/, 'Israeli job board', 'apply on the job board itself'],
+  [/(^|\.)ziprecruiter\.com$/, 'ZipRecruiter', 'apply on the job board itself'],
 ];
 
 export function detectPlatform(url: string): Platform {
