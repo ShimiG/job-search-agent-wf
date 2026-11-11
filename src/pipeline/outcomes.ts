@@ -135,6 +135,8 @@ const SOURCE_NAMES: Record<string, string> = {
   ashby: 'Ashby boards',
   workable: 'Workable boards',
   comeet: 'Comeet boards',
+  workday: 'Workday boards',
+  smartrecruiters: 'SmartRecruiters boards',
 };
 
 export function sourceLabel(job: Pick<AppliedJobRow, 'source' | 'externalId'>): string {

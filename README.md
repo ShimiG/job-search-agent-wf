@@ -101,6 +101,8 @@ npm run scout -- add-source https://jobs.lever.co/somecompany
 npm run scout -- add-source https://jobs.ashbyhq.com/somecompany
 npm run scout -- add-source https://apply.workable.com/somecompany --company "Some Company"
 npm run scout -- add-source https://www.comeet.com/jobs/somecompany/AB.C12 --token <token>
+npm run scout -- add-source https://somecompany.wd5.myworkdayjobs.com/en-US/SomeCareers
+npm run scout -- add-source https://careers.smartrecruiters.com/SomeCompany
 npm run scout -- sources     # what's configured and whether each board worked last time
 ```
 
@@ -109,6 +111,19 @@ page source and search for `token`. A board that returns 404 almost always has t
 `sources` shows it as FAILING. To pause a board, set `"enabled": false` in `config/sources.json`.
 
 Board jobs have full descriptions, and a job that disappears from its board is closed automatically.
+
+**Workday and SmartRecruiters** (many large employers) list jobs without descriptions, so each posting
+costs one more request, and big employers list thousands. Each board reads at most `maxJobs` postings
+per run (200 by default). For a big one, add `search` terms in `config/sources.json`, which use the
+site's own search box:
+
+```json
+{ "ats": "workday", "host": "nvidia.wd5.myworkdayjobs.com", "tenant": "nvidia", "site": "NVIDIAExternalCareerSite",
+  "company": "NVIDIA", "search": ["automation", "solutions engineer"], "maxJobs": 200, "enabled": true }
+```
+
+A run that hits the cap doesn't close the jobs it didn't reach. Workday needs an account per company to
+apply, so the Submitter hands Workday jobs to you; SmartRecruiters forms are filled like any other.
 
 ### LinkedIn, Indeed and Israeli job board alert emails
 

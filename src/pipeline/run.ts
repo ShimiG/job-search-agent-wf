@@ -126,7 +126,7 @@ async function collect(deps: RunDeps, stats: RunStats, iso: () => string) {
       });
       write();
       stats.fetched += jobs.length;
-      if (adapter.snapshotPrefix) {
+      if (adapter.snapshotPrefix && (adapter.lastFetchComplete?.() ?? true)) {
         stats.closed += store.markMissingAsClosed(adapter.kind, adapter.snapshotPrefix, startedAt, iso());
       }
       store.sourceSucceeded(adapter.key, jobs.length, iso());
