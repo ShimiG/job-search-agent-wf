@@ -50,7 +50,8 @@ Requires Node.js 22+, Google Chrome (for PDFs and filling forms), and an
    ```bash
    npm run scout -- add-source https://job-boards.greenhouse.io/somecompany
    ```
-   and, optionally, alert emails from LinkedIn, Indeed, Drushim or AllJobs (see [Alert emails](#linkedin-indeed-and-israeli-job-board-alert-emails)).
+   and, optionally, alert emails from LinkedIn, Indeed, Drushim, AllJobs, JobMaster, ZipRecruiter and
+   Greenhouse boards (see [Alert emails](#linkedin-indeed-and-israeli-job-board-alert-emails)).
 6. **Try a free run first.** On the review page, or with
    `npm run scout -- run --no-score`, which fetches and filters without calling Claude. Check what
    gets through, adjust your preferences, then click **Run Scout** for a scored run.
@@ -146,6 +147,29 @@ site's own search box:
 A run that hits the cap doesn't close the jobs it didn't reach. Workday needs an account per company to
 apply, so the Submitter hands Workday jobs to you; SmartRecruiters forms are filled like any other.
 
+### Public remote-job boards
+
+Two boards publish their listings through a free, documented API for others to reuse, with jobs from
+many employers, all remote:
+
+```bash
+npm run scout -- add-source https://remotive.com
+npm run scout -- add-source https://jobicy.com
+```
+
+| Board | What Scout reads | The board's conditions, which Scout keeps to |
+|---|---|---|
+| [Remotive](https://github.com/remotive-com/remote-jobs-api) | Every active job, in one request (listings are 24 hours behind the site) | Link back to the Remotive page and name Remotive as the source; at most 4 fetches a day |
+| [Jobicy](https://github.com/Jobicy/remote-jobs-api) | The last 7 days, page by page | Keep Jobicy as the source and its own job link; no new pass more often than once an hour |
+
+Every job keeps the board's link and shows the board as its source. A run that comes too soon after the
+last fetch (6 hours for Remotive, 1 for Jobicy) skips the board and says so. A remote job's location is
+where the candidate may live ("Worldwide", "Europe", "USA Only"): `locations.remoteExclude` in
+`config/preferences.json` drops the ones that rule you out. To narrow what is read, edit the entry in
+`config/sources.json`: Remotive takes one `category` and one `search`; Jobicy takes `geo` regions, one
+`industry`, one `tag` and a `maxJobs` cap. Neither board has an application form: the Submitter hands
+these to you, with **Find the company's application page**.
+
 ### LinkedIn, Indeed and Israeli job board alert emails
 
 LinkedIn and Indeed forbid automated access, but they email you alerts, and Scout reads those:
@@ -156,10 +180,12 @@ LinkedIn and Indeed forbid automated access, but they email you alerts, and Scou
 3. Set `IMAP_USER` and `IMAP_PASSWORD` in `.env`, and `"emailAlerts": { "enabled": true }` in
    `config/sources.json`.
 
-LinkedIn (saved-search alerts and "X is hiring" emails), Indeed, Drushim and AllJobs (its Hebrew "סוכן חכם"
-alerts) are built in. Hebrew cards are read too: buttons such as "שליחת קו״ח", job-type lines such as "משרה מלאה"
-and labelled fields such as "חברה:" / "מיקום:" are recognised. Add others
-under `emailAlerts.feeds` (capture group 1 of `linkPattern` must be the job ID):
+Seven are built in: LinkedIn (saved-search alerts and "X is hiring" emails), Indeed, Drushim, AllJobs
+(its Hebrew "סוכן חכם" alerts), JobMaster, ZipRecruiter, and job alerts from companies' Greenhouse boards.
+Hebrew cards are read too: buttons such as "שליחת קו״ח", job-type lines such as "משרה מלאה" and labelled
+fields such as "חברה:" / "מיקום:" are recognised. Add others under `emailAlerts.feeds` (capture group 1
+of `linkPattern` must be the job ID). When a board's links don't show the job's own address
+(ZipRecruiter's are click-tracking links), use `"urlTemplate": "{link}"` to keep the link as it is:
 
 ```json
 { "name": "examplejobs", "from": "example-jobs.com", "linkPattern": "example-jobs\\.com/job/(\\d+)", "urlTemplate": "https://example-jobs.com/job/{id}" }
@@ -468,7 +494,10 @@ application, at most 90 days):
 
 1. **Sender and subject only.** Alerts, security codes and newsletters are skipped. An email is read if
    its subject is about an application or interview (English or Hebrew), or it comes from a company you
-   applied to or an applicant tracking system.
+   applied to, an applicant tracking system (Greenhouse, Lever, Comeet…), LinkedIn's or Indeed's
+   application mail, or a job board you apply through (Drushim, JobMaster, AllJobs, ZipRecruiter).
+   The boards' job alerts ("הסוכן החכם", "משרות חדשות"…) are still skipped. The first run after a board
+   is added goes back once over its mail from the last 90 days.
 2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
    goes to the local model, which answers: confirmation, viewed, rejection, assessment, interview,
    offer, update, or not about an application. It also gives the company, the role, a one-line summary,
@@ -477,9 +506,10 @@ application, at most 90 days):
    The same job sent through LinkedIn and the company site counts as one application. A reply with no
    application to file under (you applied yourself, and nothing recorded it) creates one: a
    confirmation, a rejection, an assessment, an interview or an offer all mean you applied, so the
-   application is recorded from the email, dated by it, as sent **from your email**, and counts in the
-   stats like any other. Only a reply naming a company or a role can be recorded; the rest stay listed
-   as unmatched in the report.
+   application is recorded from the email, dated by it, as sent **from your email** (or on **Drushim**,
+   **JobMaster**, **AllJobs** or **ZipRecruiter** when the board's own confirmation says so, which gives
+   each its own row under "By how you applied" in Stats), and counts in the stats like any other. Only a
+   reply naming a company or a role can be recorded; the rest stay listed as unmatched in the report.
 4. **Report.** The **Applications** tab on the review page and `data/applications-report.md`: applied,
    waiting, assessment, interview, offer and rejected counts; how many applications were sent with this
    tool and how many by you (the other figures cover both); response rate; how many reached an

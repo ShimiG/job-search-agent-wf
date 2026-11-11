@@ -1,6 +1,7 @@
 import { convert } from 'html-to-text';
 import type { ImapCredentials, SourcesConfig } from '../config.ts';
 import { normalizeForMatch } from '../util/text.ts';
+import type { JobBoardId } from './job-boards.ts';
 
 /*
  * Applications you sent yourself (LinkedIn Easy Apply, Indeed, a company's careers page) each leave
@@ -14,7 +15,8 @@ export interface AppliedEmail {
   /** LinkedIn's job ID, when the email links to the job. Matches alert-email jobs exactly. */
   linkedinId?: string;
   /** "email": recorded by the Archiver from a reply, when nothing else had recorded the application. */
-  via: 'linkedin' | 'indeed' | 'company' | 'email';
+  /** A job board's ID ("drushim", "jobmaster"…): the same, when the reply came from that board. */
+  via: 'linkedin' | 'indeed' | 'company' | 'email' | JobBoardId;
   appliedAt: string;
   rejected: boolean;
   subject: string;
@@ -35,7 +37,7 @@ const APPLIED =
 const REJECTED =
   /decided to (?:move forward|proceed|pursue|continue) with other|not (?:to )?(?:move|moving) forward with your|will not be (?:moving|proceeding)|other candidates whose/i;
 /** Display names that are a platform, not the hiring company. */
-const PLATFORM_NAME = /^(linkedin|indeed( apply)?|greenhouse|lever|ashby|workable|comeet|workday|smartrecruiters|bamboohr|teamtailor|no[- ]?reply|notifications?|careers?|jobs|recruiting|talent( acquisition)?|hr)$/i;
+const PLATFORM_NAME = /^(linkedin|indeed( apply)?|greenhouse|lever|ashby|workable|comeet|workday|smartrecruiters|drushim|job ?master|all ?jobs|zip ?recruiter|bamboohr|teamtailor|no[- ]?reply|notifications?|careers?|jobs|recruiting|talent( acquisition)?|hr)$/i;
 
 const clean = (s: string) =>
   s.replace(/&amp;/g, '&').replace(/&#39;|&rsquo;/g, '’').replace(/&quot;/g, '"').replace(/[\s ​-‏]+/g, ' ').trim();

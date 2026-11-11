@@ -4,6 +4,7 @@ import type { NormalizedJob } from '../types.ts';
 import { htmlToText, tidyText } from '../util/text.ts';
 import { detectWorkplaceType, formatError, joinLocations, toIso, type SourceAdapter } from './common.ts';
 import type { Http } from './http.ts';
+import { jobicy, remotive } from './remote-boards.ts';
 import { smartRecruiters } from './smartrecruiters.ts';
 import { workday } from './workday.ts';
 
@@ -340,5 +341,9 @@ export function createBoardAdapter(board: BoardConfig): SourceAdapter {
       return workday(board);
     case 'smartrecruiters':
       return smartRecruiters(board);
+    case 'remotive':
+      return remotive(board);
+    case 'jobicy':
+      return jobicy(board);
   }
 }

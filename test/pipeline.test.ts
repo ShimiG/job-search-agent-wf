@@ -366,7 +366,20 @@ describe('runScout', () => {
     assert.equal((await runScout(deps([capped]))).closed, 1, 'a complete fetch still closes what is gone');
   });
 
-  it('retries scoring errors up to maxAttempts', async () => {
+  it("leaves a board alone until the time it asks for between fetches has passed", async () => {
+    let fetches = 0;
+    const limited: SourceAdapter = { key: 'remotive', kind: 'remotive', minHoursBetweenFetches: 6, fetchJobs: async () => (fetches++, [makeJob({ source: 'remotive', externalId: 'remotive:1', workplaceType: 'remote', location: 'Worldwide' })]) };
+    await runScout(deps([limited]));
+    clock = new Date('2026-10-15T11:00:00Z'); // three hours later
+    const soon = await runScout(deps([limited]));
+    assert.equal(fetches, 1);
+    assert.deepEqual([soon.fetched, soon.sources.ok, soon.sources.failed], [0, 1, 0]);
+    clock = new Date('2026-10-15T14:30:00Z'); // six and a half
+    await runScout(deps([limited]));
+    assert.equal(fetches, 2);
+  });
+
+    it('retries scoring errors up to maxAttempts', async () => {
     const prefs = makePrefs({ scoring: { threshold: 65, maxJobsPerRun: 10, concurrency: 1, maxAttempts: 2 } });
     const adapter = board('greenhouse:acme', () => [atsJob('1', 'Boom Developer')]);
     const first = await runScout(deps([adapter], { prefs }));

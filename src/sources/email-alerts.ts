@@ -7,8 +7,8 @@ import { tidyText } from '../util/text.ts';
 import { detectWorkplaceType, type SourceAdapter } from './common.ts';
 
 /*
- * Job alert emails (LinkedIn, Drushim, AllJobs...) are an approved way to get postings from
- * boards whose terms forbid scraping. They only carry a summary, so jobs from here are
+ * Job alert emails (LinkedIn, Indeed, Drushim, AllJobs, JobMaster, ZipRecruiter, Greenhouse boards)
+ * are an approved way to get postings from boards whose terms forbid scraping. They only carry a summary, so jobs from here are
  * marked descriptionIsPartial and get fuller data if the same job is found on an ATS board.
  *
  * The parser is deliberately generic: find links matching the feed's pattern, then read
@@ -46,6 +46,29 @@ export const DEFAULT_FEEDS: EmailFeed[] = [
     linkPattern: 'alljobs\\.co\\.il/[^\\s"\'<>]*?[?&]jobid=(\\d+)',
     urlTemplate: 'https://www.alljobs.co.il/Search/UploadSingle.aspx?JobID={id}',
   },
+  {
+    // JobMaster's alerts, in Hebrew. Job pages are …/jobs/checknum.asp?key=<id>.
+    name: 'jobmaster',
+    from: 'jobmaster.co.il',
+    linkPattern: 'jobmaster\\.co\\.il/[^\\s"\'<>]*?[?&]key=(\\d+)',
+    urlTemplate: 'https://www.jobmaster.co.il/jobs/checknum.asp?key={id}',
+  },
+  {
+    // ZipRecruiter's alert links are click-tracking addresses (…/ekm/<token>) that don't show the job's
+    // own page, so the link is kept as it is; a job page link with ?jid= is read the same way.
+    name: 'ziprecruiter',
+    from: 'ziprecruiter.com',
+    linkPattern: 'ziprecruiter\\.com/(?:[^\\s"\'<>]*?[?&]jid=|e?km/|k/[a-z]/)([A-Za-z0-9_-]{12,})',
+    urlTemplate: '{link}',
+  },
+  {
+    // Job alerts from companies' Greenhouse boards (sent from greenhouse.io or greenhouse-mail.io).
+    // The job is on the board (…greenhouse.io/<company>/jobs/<id>) or the company's own site (?gh_jid=<id>).
+    name: 'greenhouse-alerts',
+    from: 'greenhouse',
+    linkPattern: '(?:greenhouse\\.io/[\\w-]+/jobs/|[?&]gh_jid=)(\\d+)',
+    urlTemplate: '{link}',
+  },
 ];
 
 const NOISE_ALTERNATIVES = [
@@ -53,6 +76,8 @@ const NOISE_ALTERNATIVES = [
   String.raw`\d+ (applicants?|connections?|school alumn?i?)`,
   String.raw`[$€£₪][\d.,]+k?(\s*[-–]\s*[$€£₪]?[\d.,]+k?)?(\s*\/\s*\w+)?`,
   String.raw`full[- ]time|part[- ]time`,
+  // Buttons and footer links, which some boards make look like job links (ZipRecruiter's are all tracking links).
+  String.raw`view (all|more)( \w+)? jobs|view details|apply now|(1|one)[- ]click apply|quick apply|learn more|see all|unsubscribe|manage (your |job )?alerts|(email|notification) preferences|privacy policy|terms of (use|service)|help cent(er|re)`,
   // Hebrew buttons and badges (Drushim, AllJobs): "view the job", "send CV", "details", "hot job", "new"...
   String.raw`(ל)?צפי(י)?ה במשרה|צפה במשרה|הגש(\/י)? מועמדות|(ל)?הגשת מועמדות|למשרה( המלאה)?|לפרטים( נוספים)?( ושליחת קו["״]ח)?`,
   String.raw`(שלח|שלחו|שליחת)(\/י)? (קו["״]ח|קורות חיים)|משרה חמה|משרה דחופה|דחוף|חדש(ה)?|הסר(\/י)? מרשימת התפוצה`,
@@ -82,7 +107,7 @@ export function parseAlertEmail(html: string, feed: EmailFeed): ParsedAlertJob[]
     if (!id) return;
     const existing = byId.get(id);
     if (existing && existing.title) return;
-    const url = feed.urlTemplate.replace('{id}', id);
+    const url = feed.urlTemplate.replace('{id}', id).replace('{link}', safeDecode(href));
   // LinkedIn makes the whole card one link: title, "Company · Location", then badges, on separate lines.
     const linkLines = blockLines($, $(el)).filter((l) => !NOISE_LINE.test(l));
     if (linkLines.length >= 2) {

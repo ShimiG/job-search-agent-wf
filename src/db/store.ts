@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { UsageEntry } from '../llm/cost.ts';
+import { boardPhrase, JOB_BOARDS } from '../sources/job-boards.ts';
 import type { JobRow, JobStatus, NormalizedJob, ScoreResult } from '../types.ts';
 import { isScoutOwned } from '../types.ts';
 import { normalizeCompany, normalizeTitle, sha256 } from '../util/text.ts';
@@ -872,6 +873,7 @@ export class JobStore {
         r.sub_mode !== 'manual' ? 'this tool'
         : /on LinkedIn/.test(reason) ? 'LinkedIn'
         : /on Indeed/.test(reason) ? 'Indeed'
+        : JOB_BOARDS.some((b) => reason.includes(boardPhrase(b.id))) ? JOB_BOARDS.find((b) => reason.includes(boardPhrase(b.id)))!.label
         : /on the company site/.test(reason) ? 'company site'
         : /per your email/.test(reason) ? 'from your email'
         : 'marked by you';

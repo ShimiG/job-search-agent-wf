@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { worthReading } from '../src/archiver/classify.ts';
+import { jobBoardOf } from '../src/sources/job-boards.ts';
 import { ARCHIVE_AFTER_DAYS, buildReport, formatReport, groupApplications, isArchived, matchApplication } from '../src/archiver/report.ts';
 import { JobStore, type ResponseRecord, type SentApplication } from '../src/db/store.ts';
 import { markSubmitted } from '../src/submit/run.ts';
@@ -45,7 +46,41 @@ describe('archiver', () => {
     assert.equal(yes('LinkedIn', 'jobs-noreply@linkedin.com', 'Dana, your application was sent to Mize'), true);
   });
 
-  it('counts the same job applied to twice (LinkedIn and the company site) once', () => {
+  it('reads what Drushim and JobMaster send about a CV you sent, but not their job alerts', () => {
+    const yes = (fromName: string, fromAddress: string, subject: string) => worthReading({ fromName, fromAddress, subject }, [], 'me@example.com');
+    // Confirmations and "viewed" notices, whatever the subject says.
+    assert.equal(yes('דרושים IL', 'noreply@drushim.co.il', 'קורות החיים שלך נשלחו בהצלחה'), true);
+    assert.equal(yes('Drushim', 'info@mail.drushim.co.il', 'עדכון מדרושים'), true);
+    assert.equal(yes('JobMaster', 'no-reply@jobmaster.co.il', 'המעסיק צפה בקורות החיים שלך'), true);
+    assert.equal(yes('JobMaster', 'no-reply@jobmaster.co.il', 'עדכון חשוב'), true);
+    assert.equal(yes("ג'וב מאסטר", 'jm@mailer.example.net', 'הודעה חדשה'), true, 'sent through a mailing service');
+    // Alerts stay out.
+    assert.equal(yes('דרושים IL', 'noreply@drushim.co.il', 'הסוכן החכם מצא לך 12 משרות חדשות'), false);
+    assert.equal(yes('Drushim', 'agent@drushim.co.il', 'משרות שעשויות לעניין אותך'), false);
+    assert.equal(yes('JobMaster', 'no-reply@jobmaster.co.il', 'משרות מומלצות עבורך'), false);
+    assert.equal(yes('JobMaster', 'no-reply@jobmaster.co.il', 'סוכן חכם: 5 משרות מחכות לך'), false);
+    // Another sender with nothing about a job in the subject is still skipped.
+    assert.equal(yes('Shop', 'deals@shop.co.il', 'עדכון חשוב'), false);
+
+    // AllJobs and ZipRecruiter the same way.
+    assert.equal(yes('AllJobs', 'info@alljobs.co.il', 'קורות החיים שלך נשלחו למעסיק'), true);
+    assert.equal(yes('AllJobs', 'info@alljobs.co.il', 'הסוכן החכם: משרות חדשות עבורך'), false);
+    assert.equal(yes('ZipRecruiter', 'hello@ziprecruiter.com', 'Acme Robotics viewed your application'), true);
+    assert.equal(yes('ZipRecruiter', 'hello@ziprecruiter.com', 'An update from Acme Robotics'), true);
+    assert.equal(yes('ZipRecruiter', 'alerts@ziprecruiter.com', 'New Integration Engineer jobs in Tel Aviv'), false);
+    assert.equal(yes('ZipRecruiter', 'alerts@ziprecruiter.com', 'Jobs you might like'), false);
+    assert.deepEqual(
+      ['a@alljobs.co.il', 'a@mail.ziprecruiter.com'].map((fromAddress) => jobBoardOf({ fromName: '', fromAddress })),
+      ['alljobs', 'ziprecruiter'],
+    );
+
+    assert.equal(jobBoardOf({ fromName: '', fromAddress: 'noreply@drushim.co.il' }), 'drushim');
+    assert.equal(jobBoardOf({ fromName: 'Job Master', fromAddress: 'x@sendgrid.net' }), 'jobmaster');
+    assert.equal(jobBoardOf({ fromName: 'Acme', fromAddress: 'jobs@notdrushim.co.il' }), null);
+    assert.equal(jobBoardOf({ fromName: 'Acme דרושים', fromAddress: 'jobs@acme.co.il' }), null, '"דרושים" alone is an ordinary word');
+  });
+
+    it('counts the same job applied to twice (LinkedIn and the company site) once', () => {
     const rows = groupApplications([
       sent('Mize', 'AI Product Specialist', '2026-10-01T10:00:00.000Z', 'LinkedIn'),
       sent('Mize', 'AI Product Specialist', '2026-10-01T10:01:00.000Z', 'company site'),

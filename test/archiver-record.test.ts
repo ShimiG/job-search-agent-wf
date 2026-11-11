@@ -51,7 +51,46 @@ describe('replies about applications you sent yourself', () => {
     assert.equal(store.sentApplications().length, 1, 'the same application once');
   });
 
-  it('a rejection with nothing recorded still means you applied: recorded, and counted as rejected', () => {
+  it('records which job board an application went through, from the board\'s confirmation', () => {
+    const drushim = fileReply(
+      store,
+      reply({ fromName: 'דרושים IL', fromAddress: 'noreply@drushim.co.il', subject: 'קורות החיים שלך נשלחו', company: 'Omega', title: 'מפתח/ת אינטגרציות' }),
+      rows(),
+      NOW.toISOString(),
+    );
+    const jobmaster = fileReply(
+      store,
+      reply({ fromName: 'JobMaster', fromAddress: 'no-reply@jobmaster.co.il', subject: 'קורות החיים נשלחו למעסיק', company: 'Delta', title: 'Backend Developer', receivedAt: '2026-10-13T09:00:00.000Z' }),
+      rows(),
+      NOW.toISOString(),
+    );
+    assert.ok(drushim.created && jobmaster.created);
+    const via = new Map(store.sentApplications().map((a) => [a.job.company, a.via]));
+    assert.deepEqual([via.get('Omega'), via.get('Delta')], ['Drushim', 'JobMaster']);
+    assert.match(store.get(drushim.jobId!)!.statusReason!, /you applied on Drushim on 2026-10-12/);
+
+    // The employer's own reply later is filed under the same application.
+    const interview = fileReply(store, reply({ kind: 'interview', fromName: 'Omega HR', fromAddress: 'hr@omega.co.il', company: 'Omega', receivedAt: '2026-10-20T09:00:00.000Z' }), rows(), NOW.toISOString());
+    assert.deepEqual(interview, { jobId: drushim.jobId, created: false });
+  });
+
+  it('names every board an application can be recorded from', () => {
+    const senders: Array<[string, string, string]> = [['AllJobs', 'info@alljobs.co.il', 'Gamma'], ['ZipRecruiter', 'hello@ziprecruiter.com', 'Sigma']];
+    senders.forEach(([, fromAddress, company], i) =>
+      fileReply(store, reply({ fromAddress, company, title: `Engineer ${i}`, receivedAt: `2026-10-1${i}T09:00:00.000Z` }), rows(), NOW.toISOString()),
+    );
+    const via = new Map(store.sentApplications().map((a) => [a.job.company, a.via]));
+    assert.deepEqual(senders.map(([label, , company]) => [label, via.get(company)]), [['AllJobs', 'AllJobs'], ['ZipRecruiter', 'ZipRecruiter']]);
+  });
+
+    it('a job board confirmation for a confidential employer is recorded by its title alone', () => {
+    const filed = fileReply(store, reply({ fromAddress: 'no-reply@jobmaster.co.il', company: '', title: 'Integration Engineer' }), rows(), NOW.toISOString());
+    assert.ok(filed.created);
+    assert.equal(store.sentApplications()[0]!.via, 'JobMaster');
+    assert.equal(fileReply(store, reply({ fromAddress: 'no-reply@jobmaster.co.il', company: '', title: '' }), rows(), NOW.toISOString()).jobId, null, 'neither a company nor a role: nothing to record');
+  });
+
+    it('a rejection with nothing recorded still means you applied: recorded, and counted as rejected', () => {
     const r = reply({ kind: 'rejection', company: 'Globex', title: 'AI Engineer', subject: 'Your application to Globex', receivedAt: '2026-10-14T09:00:00.000Z' });
     const filed = fileReply(store, r, rows(), NOW.toISOString());
     assert.ok(filed.created && filed.jobId !== null);

@@ -232,3 +232,83 @@ describe('http client', () => {
     assert.equal(seen!.body, undefined);
   });
 });
+
+describe('remotive adapter', () => {
+  const board = { ats: 'remotive' as const, company: 'Remotive', category: '', search: '', enabled: true };
+  // The shape documented at github.com/remotive-com/remote-jobs-api.
+  const payload = {
+    '0-legal-notice': 'Remotive API Legal Notice',
+    'job-count': 2,
+    jobs: [
+      {
+        id: 123, url: 'https://remotive.com/remote-jobs/software-dev/lead-developer-123', title: 'Lead Developer ', company_name: 'Acme', company_logo: 'x',
+        category: 'Software Development', job_type: 'full_time', publication_date: '2026-10-08T10:23:26', candidate_required_location: 'Worldwide', salary: '$40,000 - $50,000',
+        description: '<p>Build <b>integrations</b>.</p><ul><li>Node.js</li></ul>',
+      },
+      { id: 124, url: 'https://remotive.com/remote-jobs/software-dev/backend-124', title: 'Backend Engineer', company_name: 'Beta', candidate_required_location: 'USA Only', description: '' },
+    ],
+  };
+
+  it('reads every active job in one request and keeps the Remotive link', async () => {
+    const http = fakeHttp({ 'remotive.com/api/remote-jobs': payload });
+    const adapter = createBoardAdapter(board);
+    const [first, second] = await adapter.fetchJobs(http);
+    assert.deepEqual(http.calls, ['https://remotive.com/api/remote-jobs']);
+    assert.deepEqual(
+      [first!.source, first!.externalId, first!.company, first!.title, first!.location, first!.workplaceType, first!.url],
+      ['remotive', 'remotive:123', 'Acme', 'Lead Developer', 'Worldwide', 'remote', 'https://remotive.com/remote-jobs/software-dev/lead-developer-123'],
+    );
+    assert.match(first!.description, /Build integrations\.\n+- Node\.js/);
+    assert.equal(first!.employmentType, 'full time');
+    assert.equal(first!.postedAt?.slice(0, 10), '2026-10-08');
+    assert.deepEqual([second!.location, second!.descriptionIsPartial], ['USA Only', true]);
+    assert.deepEqual([adapter.key, adapter.snapshotPrefix, adapter.minHoursBetweenFetches], ['remotive', 'remotive:', 6]);
+  });
+
+  it('passes one category and one search, still in a single request', async () => {
+    const http = fakeHttp({ 'remotive.com/api/remote-jobs': payload });
+    await createBoardAdapter({ ...board, category: 'software-dev', search: 'automation engineer' }).fetchJobs(http);
+    assert.deepEqual(http.calls, ['https://remotive.com/api/remote-jobs?category=software-dev&search=automation+engineer']);
+  });
+});
+
+describe('jobicy adapter', () => {
+  const board = { ats: 'jobicy' as const, company: 'Jobicy', geo: [] as string[], industry: '', tag: '', maxJobs: 600, enabled: true };
+  // The shape documented at github.com/Jobicy/remote-jobs-api.
+  const job = (id: number, geo = 'Anywhere') => ({
+    id, url: `https://jobicy.com/jobs/${id}-senior-engineer`, jobSlug: `${id}-senior-engineer`, jobTitle: 'Senior Engineer', companyName: 'Example Company',
+    jobIndustry: ['Engineering'], jobType: ['full-time'], jobGeo: geo, jobLevel: 'Senior', jobExcerpt: 'Short.', jobDescription: '<p>Own our <b>REST</b> APIs.</p>',
+    pubDate: '2026-10-09T12:00:00+00:00',
+  });
+  const page = (jobs: unknown[], nextCursor: string | null) => ({ apiVersion: '2.2.18', success: true, statusCode: 200, jobCount: jobs.length, jobs, nextCursor, hasMore: Boolean(nextCursor) });
+
+  it('follows the cursor to the end and keeps the Jobicy link', async () => {
+    const http = fakeHttp({ 'jobicy.com/api/jobs': (_: unknown, url: string) => (url.includes('cursor=abc') ? page([job(3, 'Europe')], null) : page([job(1), job(2, 'USA')], 'abc')) });
+    const adapter = createBoardAdapter(board);
+    const jobs = await adapter.fetchJobs(http);
+    assert.deepEqual(http.calls, ['https://jobicy.com/api/jobs?count=200', 'https://jobicy.com/api/jobs?count=200&cursor=abc']);
+    assert.deepEqual(jobs.map((j) => [j.externalId, j.location, j.workplaceType]), [['jobicy:1', 'Anywhere', 'remote'], ['jobicy:2', 'USA', 'remote'], ['jobicy:3', 'Europe', 'remote']]);
+    const [first] = jobs;
+    assert.deepEqual([first!.source, first!.company, first!.title, first!.url, first!.employmentType, first!.department], ['jobicy', 'Example Company', 'Senior Engineer', 'https://jobicy.com/jobs/1-senior-engineer', 'full-time', 'Engineering']);
+    assert.match(first!.description, /Own our REST APIs\./);
+    assert.equal(first!.postedAt, '2026-10-09T12:00:00.000Z');
+    assert.deepEqual([adapter.snapshotPrefix, adapter.minHoursBetweenFetches], [undefined, 1], 'a job leaving the 7-day feed may still be open');
+  });
+
+  it('makes one pass per region with the same filters, stops at maxJobs, and reports a refusal', async () => {
+    const http = fakeHttp({ 'jobicy.com/api/jobs': (_: unknown, url: string) => page([job(url.includes('geo=emea') ? 2 : 1), job(9)], null) });
+    const jobs = await createBoardAdapter({ ...board, geo: ['anywhere', 'emea'], industry: 'engineering', tag: 'automation' }).fetchJobs(http);
+    assert.deepEqual(http.calls, [
+      'https://jobicy.com/api/jobs?count=200&geo=anywhere&industry=engineering&tag=automation',
+      'https://jobicy.com/api/jobs?count=200&geo=emea&industry=engineering&tag=automation',
+    ]);
+    assert.deepEqual(jobs.map((j) => j.externalId), ['jobicy:1', 'jobicy:9', 'jobicy:2'], 'the same job from two regions once');
+
+    const capped = fakeHttp({ 'jobicy.com/api/jobs': () => page([job(1), job(2), job(3)], 'more') });
+    assert.equal((await createBoardAdapter({ ...board, maxJobs: 2 }).fetchJobs(capped)).length, 2);
+    assert.equal(capped.calls.length, 1);
+
+    const refused = fakeHttp({ 'jobicy.com/api/jobs': { success: false, error: 'Invalid cursor' } });
+    await assert.rejects(createBoardAdapter(board).fetchJobs(refused), /jobicy: Invalid cursor/);
+  });
+});

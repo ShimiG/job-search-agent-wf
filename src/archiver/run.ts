@@ -6,6 +6,7 @@ import { ollamaHasModel, ollamaModel } from '../llm/ollama.ts';
 import { emailBodyText, type RawEmail } from '../sources/applications.ts';
 import type { Logger } from '../util/logger.ts';
 import { normalizeCompany } from '../util/text.ts';
+import { JOB_BOARDS } from '../sources/job-boards.ts';
 import { classifyEmail, worthReading } from './classify.ts';
 import { fileReply } from './record.ts';
 import { buildReport, formatReport, groupApplications } from './report.ts';
@@ -118,7 +119,21 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
         logger.info(`Archiver: first run, reading mail since ${since.toISOString().slice(0, 10)}`);
       }
       uids.sort((a, b) => a - b);
-      stats.checked = uids.length;
+
+      // A job board the Archiver has learned to read since its last run: its earlier mail was passed
+      // over then, so go back for it once. (A first run reads everything anyway.)
+      const boardsKey = `${key}:boards`;
+      const boardsRead = new Set(JSON.parse(store.getKv(boardsKey) ?? '[]') as string[]);
+      const earlier = new Set<number>();
+      if (mark && mark.uidValidity === uidValidity) {
+        const since = new Date(Date.now() - (deps.firstRunDays ?? 90) * 86_400_000);
+        for (const board of JOB_BOARDS.filter((b) => !boardsRead.has(b.id))) {
+          const found = ((await client.search({ since, from: board.search }, { uid: true })) || []).filter((u) => u <= mark.lastUid);
+          found.forEach((u) => earlier.add(u));
+          if (found.length) logger.info(`Archiver: going back over ${found.length} earlier email(s) from ${board.label}`);
+        }
+      }
+      stats.checked = uids.length + earlier.size;
 
       // Sender and subject first (cheap), then the full email only for likely ones.
       const wanted: Array<{ uid: number; messageId: string }> = [];
@@ -129,6 +144,14 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
         if (worthReading(env, companies, credentials.user) && !store.hasResponse(messageId)) wanted.push({ uid: msg.uid, messageId });
       }
       if (uids.length) logger.info(`Archiver: ${uids.length} new emails, ${wanted.length} look like replies about applications`);
+      // The earlier job-board emails, by the same test; read after any retries, without moving the bookmark.
+      const backlog: Array<{ uid: number; messageId: string }> = [];
+      for await (const msg of earlier.size ? client.fetch([...earlier].sort((a, b) => a - b), { envelope: true }, { uid: true }) : []) {
+        const from = msg.envelope?.from?.[0];
+        const env = { fromName: from?.name ?? '', fromAddress: from?.address ?? '', subject: msg.envelope?.subject ?? '' };
+        const messageId = msg.envelope?.messageId || `${uidValidity}:${msg.uid}`;
+        if (worthReading(env, companies, credentials.user) && !store.hasResponse(messageId)) backlog.push({ uid: msg.uid, messageId });
+      }
 
       const advance = (upTo: number) => store.setKv(key, JSON.stringify({ uidValidity, lastUid: upTo }));
       // Emails the model couldn't answer in time last run, tried again (three tries in all).
@@ -197,6 +220,13 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           handled.add(r.uid);
           if (outcome === 'retry' && r.tries + 1 < 3) later.push({ ...r, tries: r.tries + 1 });
         }
+        for (const item of backlog) {
+          const outcome = await read(item);
+          if (outcome === 'stop') return;
+          if (outcome === 'retry') later.push({ ...item, tries: 1 });
+        }
+        // Every board's earlier mail has been gone over: not again.
+        store.setKv(boardsKey, JSON.stringify(JOB_BOARDS.map((b) => b.id)));
         for (const uid of uids) {
           const item = wanted.find((w) => w.uid === uid);
           if (item) {

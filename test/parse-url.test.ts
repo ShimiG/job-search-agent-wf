@@ -58,7 +58,14 @@ describe('detectBoard', () => {
     }
   });
 
-  it('rejects unknown sites and job links', () => {
+  it('adds the public remote-job boards from their home pages or any job link', () => {
+    const remotive = detectBoard('https://remotive.com/remote-jobs/software-dev/lead-developer-123');
+    assert.ok(remotive.ok && remotive.board.ats === 'remotive' && remotive.board.company === 'Remotive');
+    const jobicy = detectBoard('https://jobicy.com/');
+    assert.ok(jobicy.ok && jobicy.board.ats === 'jobicy' && jobicy.board.maxJobs === 600);
+  });
+
+    it('rejects unknown sites and job links', () => {
     assert.equal(detectBoard('https://www.linkedin.com/jobs/view/123').ok, false);
     assert.equal(detectBoard('https://apply.workable.com/j/ABC123').ok, false);
     assert.equal(detectBoard('not a url').ok, false);

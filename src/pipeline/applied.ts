@@ -1,3 +1,4 @@
+import { boardPhrase, type JobBoardId } from '../sources/job-boards.ts';
 import { createHash } from 'node:crypto';
 import type { JobStore } from '../db/store.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
@@ -79,7 +80,8 @@ function canonical(store: JobStore, job: JobRow): JobRow {
 }
 
 function note(app: AppliedEmail): string {
-  const via = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site', email: 'per your email' }[app.via];
+  const fixed = { linkedin: 'on LinkedIn', indeed: 'on Indeed', company: 'on the company site', email: 'per your email' } as const;
+  const via = app.via in fixed ? fixed[app.via as keyof typeof fixed] : boardPhrase(app.via as JobBoardId);
   return `you applied ${via} on ${app.appliedAt.slice(0, 10)}${app.rejected ? '; they declined' : ''}`;
 }
 

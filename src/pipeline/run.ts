@@ -128,6 +128,14 @@ async function collect(deps: RunDeps, stats: RunStats, iso: () => string) {
   const { store, logger } = deps;
   for (const adapter of deps.adapters) {
     const startedAt = iso();
+    // A board that limits how often its feed is read is left alone until that time has passed.
+    const last = adapter.minHoursBetweenFetches ? store.sourceHealth().find((h) => h.source_key === adapter.key)?.last_success_at : null;
+    const hoursSince = last ? (Date.parse(startedAt) - Date.parse(last)) / 3_600_000 : Infinity;
+    if (adapter.minHoursBetweenFetches && hoursSince < adapter.minHoursBetweenFetches) {
+      logger.info(`${adapter.key}: read ${hoursSince < 1 ? 'under an hour' : `${Math.floor(hoursSince)} hour(s)`} ago; it asks for at least ${adapter.minHoursBetweenFetches} between fetches, so not this run`);
+      stats.sources.ok++;
+      continue;
+    }
     try {
       const jobs = await adapter.fetchJobs(deps.http);
       const write = store.db.transaction(() => {
