@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type PlanContext } from '../src/submit/answers.ts';
 import { bestOption } from '../src/submit/form.ts';
-import { applyMapped } from '../src/submit/llm.ts';
+import { applyMapped, mapWithRetry, type MapperInput } from '../src/submit/llm.ts';
 import { SubmitFileSchema, type FormField } from '../src/submit/schema.ts';
 import { exampleCv } from './tailor-helpers.ts';
 
@@ -103,6 +103,55 @@ describe('model answers', () => {
       { key: fields[4]!.key, type: 'fact', value: 'true', reason: 'checkbox' },
     ]);
     assert.deepEqual(plan.map((p) => [p.value, p.source]), [['', 'none'], ['TypeScript', 'model_fact'], ['', 'none'], ['', 'none'], ['', 'none']]);
+  });
+
+  it('asks once more about answers that failed a check, with the reason, and keeps what then fits', async () => {
+    const plan = planDeterministic(fields, ctx());
+    const [why, stack, years] = fields;
+    const calls: MapperInput[] = [];
+    const mapper = {
+      async map(input: MapperInput) {
+        calls.push(input);
+        if (!input.retry) {
+          return [
+            { key: why!.key, type: 'draft', value: 'x'.repeat(80), reason: 'motivation' },
+            { key: stack!.key, type: 'fact', value: 'Node and TS', reason: 'CV stack' },
+            { key: years!.key, type: 'unknown', value: '', reason: 'not in CV' },
+          ];
+        }
+        return [
+          { key: why!.key, type: 'draft', value: 'y'.repeat(90), reason: 'still too long' },
+          { key: stack!.key, type: 'fact', value: 'TypeScript', reason: 'CV stack' },
+          { key: years!.key, type: 'fact', value: '5', reason: 'not asked this time' },
+        ];
+      },
+    };
+    const input = { fields: [why!, stack!, years!], job: { title: 'Engineer', company: 'Acme', location: '' }, profile: ctx().profile, answers: settings, cv: exampleCv(), tailored: null };
+    const result = await mapWithRetry(mapper, input, plan, fields);
+
+    assert.deepEqual(result, { retried: 2, recovered: 1 });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1]!.fields.map((f) => f.key), [why!.key, stack!.key], 'only the rejected fields are asked again');
+    assert.match(calls[1]!.retry![1]!.problem, /not one of the options/);
+    assert.match(calls[1]!.retry![0]!.problem, /80 characters, over the field's limit of 50/);
+    assert.deepEqual(plan.slice(0, 3).map((p) => [p.value, p.source]), [['', 'none'], ['TypeScript', 'model_fact'], ['', 'none']]);
+  });
+
+  it("doesn't ask again when everything fits, and survives a failed second try", async () => {
+    const [, stack] = fields;
+    const input = { fields: [stack!], job: { title: 'Engineer', company: 'Acme', location: '' }, profile: ctx().profile, answers: settings, cv: exampleCv(), tailored: null };
+    let n = 0;
+    const fits = { map: async () => (n++, [{ key: stack!.key, type: 'fact', value: 'python', reason: '' }]) };
+    assert.deepEqual(await mapWithRetry(fits, input, planDeterministic(fields, ctx()), fields), { retried: 0, recovered: 0 });
+    assert.equal(n, 1);
+
+    const failing = {
+      map: async (i: MapperInput) => {
+        if (i.retry) throw new Error('API overloaded');
+        return [{ key: stack!.key, type: 'fact', value: 'Rust', reason: '' }];
+      },
+    };
+    assert.deepEqual(await mapWithRetry(failing, input, planDeterministic(fields, ctx()), fields), { retried: 1, recovered: 0 });
   });
 
   it('matches options loosely but not wildly', () => {
