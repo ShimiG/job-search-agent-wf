@@ -79,7 +79,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `data/master-cv.json` | Your CV as structured data, blank until you upload one via **Your CV** on the review page. Every highlight has an `id`: the Tailor cites these to prove each claim in a tailored CV comes from you. |
 | `config/preferences.json` | Target roles, title keywords, seniority, locations (`allowOnsite`, remote rules), languages, score cutoffs, web lookups. |
 | `config/sources.json` | Job boards, and inbox reading (`emailAlerts`): alert emails, application confirmations and replies. |
-| `config/tailor.json` | Your email and phone for the CV header, languages, length limits, cover-letter style. |
+| `config/tailor.json` | Your email and phone for the CV header, languages, length limits, the CV's sections and their order (`cv.sections`), cover-letter style. |
 | `config/submit.json` | Submitter settings and your answer bank for screening questions. |
 | `.env` | API key and optional settings below. |
 
@@ -109,6 +109,30 @@ The file is `{ "projects": [ { "id", "name", "stack": [], "highlights": [ { "id"
 project with the same ID or the same name replaces the old entry, the rest are added, and projects the
 file doesn't list stay (`--replace-all` removes them). Highlight IDs must be unique across the CV. The
 old CV is kept next to it as a backup.
+
+### Checking your CV
+
+The Tailor only rewords what your CV says and never adds a figure, so a weak highlight stays weak in
+every CV it writes. `cv-check` reads `data/master-cv.json` by the same writing rules the Tailor's
+bullets are held to and lists what to fix at the source:
+
+```bash
+npm run scout -- cv-check
+```
+
+- **Wording:** highlights that open with "Responsible for", "Worked on" or a noun instead of an active
+  past-tense verb, use I/we/my/our, spell a number out ("three services"), lean on words that praise
+  the work without describing it ("successfully", "cutting-edge"), or run past 300 characters (usually
+  two things the Tailor could choose between).
+- **Skills:** a grade you gave yourself ("Python (Advanced)", "90%"), tools every office uses (Jira,
+  Slack, Microsoft Office), repeats, and skills that no highlight, project stack or certificate shows.
+- **No number:** highlights with no figure in them, listed separately. Add one only if you have a real
+  one; the check never suggests a number.
+- A summary over about four lines, more than 30 skills, and roles with fewer than 2 highlights.
+
+It only reports; nothing is rewritten. The wording rules are for English; a Hebrew or Russian CV is
+checked for length, skills and numbers. The same check is on the review page under
+**Settings → Your CV**.
 
 ## Where jobs come from
 
@@ -335,6 +359,10 @@ Upload a PDF or Word (.docx) CV and Claude converts it into `data/master-cv.json
 and you can add LinkedIn, GitHub and website links that a PDF only shows as clickable words. Saving keeps
 the previous CV as a backup and puts your email and phone in `config/tailor.json`.
 
+Below the upload, **CV check** shows how the CV itself reads: how many highlights state a number, which
+ones break a writing rule, and which skills nothing backs up (see
+[Checking your CV](#checking-your-cv)).
+
 ### Certificates
 
 **Settings → Certificates** keeps certificates you hold: PDF, PNG or JPG, up to 5 MB each, at most 20.
@@ -522,7 +550,11 @@ and that email is read on the next run. **Check email now** on the Applications 
 ### Tailor
 
 1. **Draft.** Claude selects and rewords highlights from your CV for this posting, picks skills, writes
-   a headline, summary and cover letter, and lists requirements your CV doesn't show.
+   a headline, summary and cover letter, and lists requirements your CV doesn't show. Bullets follow the
+   conventions technical recruiters expect: an active past-tense verb first, no pronouns and no
+   "Responsible for", the result up front when your highlight states one (never a suggested number),
+   digits for numbers, no adverbs that praise the work, at most two lines. Skills your chosen bullets
+   show are preferred over ones that appear nowhere else on the page.
 2. **Rules.** Bullets must cite real highlight IDs, skills must be yours, every job in your history
    stays, and a reworded line that adds a number or a tool name your CV doesn't contain reverts to your
    exact wording.
@@ -530,11 +562,17 @@ and that email is read on the next run. **Check email now** on the Applications 
    Unsupported bullets revert to your wording; flagged letter paragraphs get one rewrite and are checked
    again. Anything still unsupported is listed for you, and approving it needs an explicit "send anyway".
 4. **Render.** Employers, titles and dates come straight from your CV. Plain one-column templates (what
-   ATS parsers read best) are printed to PDF with Chrome.
+   ATS parsers read best) are printed to PDF with Chrome. Skills print under the categories your CV
+   files them in, the most relevant category first (`cv.groupSkills: false` gives one flat line).
+   `cv.sections` sets which sections the CV has and their order; the default is summary, experience,
+   projects, skills, education, certifications, languages. Leave `"summary"` out for a CV without one
+   (it is still written, for forms that ask for a short introduction), or put `"skills"` or
+   `"projects"` ahead of `"experience"`; `"experience"` has to stay.
 5. **Fit.** A CV longer than `cv.targetPages` (1 by default) is shortened, weakest parts first, and
    rendered again until it fits: fewer skills, one project, fewer bullets for older roles, a two-sentence
-   summary, fewer bullets for the current role, smaller type, and only then no project. Nothing is
-   reworded; the report says what was trimmed. Versions you edit by hand are never trimmed.
+   summary, fewer bullets for the current role, smaller type (never under 10pt, with half-inch margins),
+   and only then no project. Nothing is reworded; the report says what was trimmed. Versions you edit
+   by hand are never trimmed.
 6. **ATS keywords.** Many employers screen with an ATS that matches the posting's exact words. The draft
    also lists the posting's key terms (8–20), and each is checked against the final CV text: **in the
    CV** word for word, **left out** (your CV uses the term, this version doesn't), **in other words**
@@ -551,6 +589,18 @@ and that email is read on the next run. **Check email now** on the Applications 
    letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
    offers **Redo with fresh wording**. A repeat of a letter to the same company is marked in red: the
    same people may read both. Redoing the same job never counts as a repeat.
+8. **Bullet style.** Each bullet of the finished CV is checked against the writing rules from step 1.
+   Ready to send shows "Wording 2" and the bullets with what is off about each. A bullet that is your
+   CV's own wording says so (fix it once in your CV); for the rest, **Redo with tighter wording** fills
+   in a note for the Tailor. Nothing is rewritten on its own, and it never holds up an application.
+9. **PDF text.** An ATS doesn't look at the page: it pulls the text out of the file. So the finished CV
+   is read back out of its PDF the way a parser would and compared with what was put on the page:
+   every heading, line and bullet has to be there character for character, in reading order (Hebrew is
+   stored in the order it is drawn, so there only the characters are compared). Ready to send shows
+   "PDF reads as text", or names the lines that don't come through. The templates turn off ligatures
+   and contextual glyphs, which some fonts draw with shapes that have no character behind them: with
+   one common font (Inter), two of three PDF readers tried lost brackets, dashes and the phone number
+   before that.
 
 Each version lands in `data/applications/<job>-<company>/v<N>/`: the PDFs (the file names recruiters
 see), HTML versions, `content.json` (edit it, then `npm run tailor -- render <id>`) and `report.md`.
@@ -625,6 +675,7 @@ npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [-
 npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
 npm run scout -- cv-projects <file.json> [--replace-all]
+npm run scout -- cv-check
 npm run scout -- watch [--cron "0 8 * * *"]
 npm run scout -- compare-scorers [--limit 40]
 
@@ -681,8 +732,9 @@ src/
   archiver/              reading replies, sorting them, the applications report
   cv/import.ts           CV upload: PDF/Word to the master CV
   cv/certificates.ts     your certificates: validation, storage, what the Tailor sees
+  cv/audit.ts            the CV check: wording, numbers, skills
   settings.ts            settings saved from the review page (the shortlist's minimum score)
-  tailor/                draft, rules, fact-check, render
+  tailor/                draft, rules, fact-check, render, bullet style, PDF text check
   submit/                answers, form filling, security codes, modes and records
   graph/graphs.ts        the LangGraph graphs
   review/                the review page (server, page, launcher)
@@ -707,6 +759,9 @@ automatically; elsewhere, point `TAILOR_TEST_BROWSER` at a Chromium binary.
 
 - **Live coverage is thin.** The Submitter has completed real Greenhouse applications, but other ATSs
   were tested only against local look-alike pages. Use Prepare or Assist mode on a new site first.
+- **The PDF text check reads the file with one parser** (pdf.js). It catches text that isn't in the
+  file as characters, or is stored out of order; an employer's ATS may still read a clean file its own
+  way, especially right-to-left text.
 - **The fact-check is a strong filter, not a guarantee,** and the rule checks catch new numbers and tool
   names, not subtler inflation ("built" becoming "led"). Read applications before approving them.
 - **Web lookups and alert parsing are heuristic.** A lookup may find nothing, and alert email layouts

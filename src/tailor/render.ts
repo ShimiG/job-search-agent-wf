@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MasterCv } from '../config.ts';
+import { extractPdfText } from './pdf-text.ts';
 import type { CvSection, OutputLanguage, TailorConfig, TailoredContent } from './schema.ts';
 
 /*
@@ -39,6 +40,9 @@ const BASE_CSS = `
 @page { size: A4; margin: 15mm 17mm; }
 * { box-sizing: border-box; }
 body { margin: 0; color: #1d1d1f; font: 10.3pt/1.42 "Segoe UI", Arial, "Noto Sans Hebrew", "DejaVu Sans", sans-serif; }
+/* No ligatures or contextual glyph swaps: a font may draw "fi", or a bracket next to a capital, with a
+   glyph that has no character behind it, and a parser reading the PDF then gets nothing for it. */
+body { font-variant-ligatures: none; }
 h1 { font-size: 20pt; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .headline { font-size: 11.5pt; color: #3a3a3c; margin: 2px 0 4px; }
 .contact { font-size: 9.3pt; color: #48484a; }
@@ -200,6 +204,8 @@ export function documentNames(cvName: string) {
 export interface PdfEngine {
   /** Renders HTML to a PDF file and returns its page count. */
   render(html: string, outPath: string): Promise<{ pages: number }>;
+  /** The text a parser reads out of a PDF this engine made. Engines without it skip the text check. */
+  readText?(pdfPath: string): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -227,6 +233,7 @@ export async function launchPdfEngine(browserPath: string): Promise<PdfEngine> {
             await page.close();
           }
         },
+        readText: extractPdfText,
         close: () => browser.close(),
       };
     } catch (err) {

@@ -33,8 +33,14 @@ const HEBREW_OR_CYRILLIC = /[֐-׿Ѐ-ӿ]/;
 /** What's off about one bullet, in plain words. Empty when it reads as it should. */
 export function bulletProblems(text: string): string[] {
   const t = text.trim();
+  const tooLong = t.length > MAX_BULLET_CHARS ? [`runs to about three lines (${t.length} characters; two lines is about ${MAX_BULLET_CHARS})`] : [];
+  return [...tooLong, ...wordingProblems(t)];
+}
+
+/** The wording rules alone, without the length one: a master-CV highlight may hold more than a bullet prints. */
+export function wordingProblems(text: string): string[] {
+  const t = text.trim();
   const problems: string[] = [];
-  if (t.length > MAX_BULLET_CHARS) problems.push(`runs to about three lines (${t.length} characters; two lines is about ${MAX_BULLET_CHARS})`);
   // The wording rules are English ones.
   if (HEBREW_OR_CYRILLIC.test(t)) return problems;
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { KeywordCoverage } from './keywords.ts';
 import type { LetterSimilarity } from './similarity.ts';
+import type { PdfTextCheck } from './pdf-text.ts';
 import type { StyleNote } from './style.ts';
 
 export const SUPPORTED_LANGUAGES = ['en', 'he', 'ru'] as const;
@@ -182,4 +183,6 @@ export interface VerificationReport {
   letterSimilarity?: LetterSimilarity;
   /** CV bullets that break a writing rule: a weak opener, a pronoun, over two lines… */
   style?: StyleNote[];
+  /** Whether the CV's text can be read back out of its PDF, as an applicant tracking system reads it. */
+  pdfText?: PdfTextCheck;
 }

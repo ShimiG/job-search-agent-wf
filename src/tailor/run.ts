@@ -11,6 +11,7 @@ import type { ClaimVerifier, DraftInput, RecentLetter, TailorWriter } from './ll
 import { documentNames, renderCvHtml, renderLetterHtml, writeText, type PdfEngine } from './render.ts';
 import { SUPPORTED_LANGUAGES, type Issue, type OutputLanguage, type TailorConfig, type TailoredContent, type VerificationReport } from './schema.ts';
 import { formatCoverage, keywordCoverage } from './keywords.ts';
+import { checkPdfText, pageText, pdfTextMessage, pdfTextOk } from './pdf-text.ts';
 import { formatStyleNotes, styleNotes } from './style.ts';
 import { letterSimilarity, similarityMessages, type EarlierLetter } from './similarity.ts';
 import { applyVerdicts, bulletChanges, claimsForReview, factCheck, normalizeDraft, type Claim, type ContentBody } from './verify.ts';
@@ -210,6 +211,18 @@ const SHRINK: Shrink[] = [
  * cv.targetPages is trimmed (see SHRINK) and finally set in compact type until it fits. Returns the
  * content as written, which may be the trimmed version.
  */
+/** Reads the finished CV back out of its PDF, as an applicant tracking system would, and notes what didn't come through. */
+async function checkText(pdf: PdfEngine, cvPdf: string, cvHtml: string, report: VerificationReport): Promise<void> {
+  if (!pdf.readText) return;
+  try {
+    report.pdfText = checkPdfText(await pdf.readText(cvPdf), pageText(cvHtml));
+    if (!pdfTextOk(report.pdfText)) report.issues.push({ severity: 'warning', where: 'pdf-text', message: pdfTextMessage(report.pdfText) });
+  } catch (err) {
+    // The CV itself is fine; only the check couldn't run.
+    report.issues.push({ severity: 'warning', where: 'pdf-text', message: `could not read the PDF's text back to check it: ${(err as Error).message.split('\n')[0]}` });
+  }
+}
+
 export async function writeArtifacts(
   dir: string,
   content: TailoredContent,
@@ -226,7 +239,8 @@ export async function writeArtifacts(
   let compact = false;
   let cvHtml = renderCvHtml(fitted, deps.cv, deps.cfg);
   const files = [writeText(dir, `${names.letter}.html`, letterHtml)];
-  report.issues = report.issues.filter((i) => i.where !== 'layout');
+  report.issues = report.issues.filter((i) => i.where !== 'layout' && i.where !== 'pdf-text');
+  delete report.pdfText;
   if (deps.pdf) {
     const cvPdf = path.join(dir, `${names.cv}.pdf`);
     const letterPdf = path.join(dir, `${names.letter}.pdf`);
@@ -247,6 +261,7 @@ export async function writeArtifacts(
       }
     }
     await deps.pdf.render(letterHtml, letterPdf);
+    await checkText(deps.pdf, cvPdf, cvHtml, report);
     files.unshift(cvPdf, letterPdf);
     report.cvPages = pages;
     if (trimmed.length) {
@@ -392,6 +407,7 @@ export function formatReport(content: TailoredContent, report: VerificationRepor
     '',
     ...formatCoverage(report.keywords),
     ...formatStyleNotes(report.style),
+    ...(report.pdfText ? ['## PDF text', pdfTextMessage(report.pdfText), ''] : []),
     '## Posting requirements your CV does not show',
     list(content.notes.requirementsNotMet),
     '',
