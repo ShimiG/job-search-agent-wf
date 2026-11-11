@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -20,6 +20,7 @@ import { CostMeter } from './llm/cost.ts';
 import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
+import { mergeProjects, parseProjectsFile } from './cv/projects.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { compareWithClaude, formatComparison } from './llm/compare.ts';
 import { ollamaModel } from './llm/ollama.ts';
@@ -60,6 +61,9 @@ Commands:
   results                      Callback rates (by source, score and how you applied) and what the search has cost
   add-source <careers-url> [--company "Name"] [--token T]
                                Detect the ATS from a careers URL and add it to sources.json
+  cv-projects <file.json> [--replace-all]
+                               Update the projects in your CV from a file: same ID or name replaces, the rest
+                               are added; --replace-all also removes projects the file doesn't list
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
   watch [--cron "0 8 * * *"]   Keep running and do a full run on a schedule
   archive                      Archiver: sort new replies to your applications and update data/applications-report.md
@@ -260,6 +264,36 @@ function commandAddSource(paths: Paths, url: string | undefined, values: Record<
   console.log(`Added ${key} (${detected.board.company}). Edit config/sources.json to rename it.`);
 }
 
+/** Replaces or adds projects in data/master-cv.json from a file, keeping a backup of the old CV. */
+function commandCvProjects(paths: Paths, file: string | undefined, replaceAll: boolean) {
+  if (!file) throw new ConfigError('Usage: cv-projects <file.json> [--replace-all]');
+  if (!existsSync(file)) throw new ConfigError(`No such file: ${file}`);
+  if (!existsSync(paths.masterCv)) throw new ConfigError(`No CV yet at ${paths.masterCv}. Upload one on the review page first (Settings → Your CV).`);
+  let incoming;
+  try {
+    incoming = parseProjectsFile(JSON.parse(readFileSync(file, 'utf8')));
+  } catch (err) {
+    throw new ConfigError(`${file} isn't a list of projects: ${(err as Error).message}`);
+  }
+  let merged;
+  try {
+    merged = mergeProjects(loadJsonFile(paths.masterCv, MasterCvSchema), incoming, { replaceAll });
+  } catch (err) {
+    throw new ConfigError((err as Error).message);
+  }
+  const backup = paths.masterCv.replace(/\.json$/, `.backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  copyFileSync(paths.masterCv, backup);
+  writeFileSync(paths.masterCv, JSON.stringify(merged.cv, null, 2) + '\n');
+  const list = (label: string, names: string[]) => names.length && console.log(`${label}: ${names.join(', ')}`);
+  list('Added', merged.added);
+  list('Updated', merged.updated);
+  list('Kept as they were', merged.kept);
+  list('Removed', merged.removed);
+  const highlights = merged.cv.projects.reduce((n, p) => n + p.highlights.length, 0);
+  console.log(`Your CV now has ${merged.cv.projects.length} project(s) with ${highlights} highlights. The old CV is at ${backup}`);
+  if (merged.kept.length) console.log('If a kept project is an older entry for one you just added under another name, run again with --replace-all.');
+}
+
 function commandInit(root: string, paths: Paths) {
   const examples = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'examples');
   mkdirSync(paths.configDir, { recursive: true });
@@ -313,6 +347,7 @@ async function main() {
     options: {
       'no-score': { type: 'boolean' },
       batch: { type: 'boolean' },
+      'replace-all': { type: 'boolean' },
       'open-review': { type: 'boolean' },
       status: { type: 'string' },
       all: { type: 'boolean' },
@@ -396,6 +431,8 @@ async function main() {
     }
     case 'add-source':
       return commandAddSource(paths, args[0], values);
+    case 'cv-projects':
+      return commandCvProjects(paths, args[0], Boolean(values['replace-all']));
     case 'reevaluate': {
       const store = new JobStore(paths.db);
       try {
