@@ -10,9 +10,9 @@ import type { OutputLanguage, TailorConfig, TailoredContent } from './schema.ts'
  */
 
 const LABELS: Record<OutputLanguage, Record<string, string>> = {
-  en: { summary: 'Summary', experience: 'Experience', projects: 'Projects', skills: 'Skills', education: 'Education', languages: 'Languages', present: 'Present', cv: 'CV', letter: 'Cover Letter', re: 'Application' },
-  he: { summary: 'תקציר', experience: 'ניסיון תעסוקתי', projects: 'פרויקטים', skills: 'כישורים', education: 'השכלה', languages: 'שפות', present: 'היום', cv: 'קורות חיים', letter: 'מכתב מקדים', re: 'מועמדות למשרת' },
-  ru: { summary: 'О себе', experience: 'Опыт работы', projects: 'Проекты', skills: 'Навыки', education: 'Образование', languages: 'Языки', present: 'н.в.', cv: 'Резюме', letter: 'Сопроводительное письмо', re: 'Отклик на вакансию' },
+  en: { summary: 'Summary', experience: 'Experience', projects: 'Projects', skills: 'Skills', education: 'Education', certifications: 'Certifications', languages: 'Languages', present: 'Present', cv: 'CV', letter: 'Cover Letter', re: 'Application' },
+  he: { summary: 'תקציר', experience: 'ניסיון תעסוקתי', projects: 'פרויקטים', skills: 'כישורים', education: 'השכלה', certifications: 'הסמכות', languages: 'שפות', present: 'היום', cv: 'קורות חיים', letter: 'מכתב מקדים', re: 'מועמדות למשרת' },
+  ru: { summary: 'О себе', experience: 'Опыт работы', projects: 'Проекты', skills: 'Навыки', education: 'Образование', certifications: 'Сертификаты', languages: 'Языки', present: 'н.в.', cv: 'Резюме', letter: 'Сопроводительное письмо', re: 'Отклик на вакансию' },
 };
 
 const MONTHS: Record<OutputLanguage, string[]> = {
@@ -107,6 +107,13 @@ export function renderCvHtml(content: TailoredContent, cv: MasterCv, cfg: Tailor
 
   const languages = cv.languages.map((l) => `${e(l.language)} (${e(l.level)})`).join(' · ');
 
+  // Names come from what you typed when uploading; a certificate removed since is left out.
+  const certifications = (content.certifications ?? [])
+    .map((id) => cv.certifications?.find((c) => c.id === id))
+    .filter((c): c is NonNullable<typeof c> => Boolean(c))
+    .map((c) => `<div class="entry"><div class="entry-head"><div class="entry-title">${e(c.name)}</div><div class="entry-meta">${e(c.year ?? '')}</div></div>${c.issuer ? `<div class="muted">${e(c.issuer)}</div>` : ''}</div>`)
+    .join('\n');
+
   return `<!doctype html>
 <html lang="${lang}" dir="${dir(lang)}">
 <head><meta charset="utf-8"><title>${e(cv.name)} – ${L.cv}</title><style>${BASE_CSS}${opts.compact ? COMPACT_CSS : ''}</style></head>
@@ -124,6 +131,7 @@ ${projects ? `<h2>${L.projects}</h2>\n${projects}` : ''}
 <h2>${L.skills}</h2>
 <p>${content.skills.map(e).join(' · ')}</p>
 ${education ? `<h2>${L.education}</h2>\n${education}` : ''}
+${certifications ? `<h2>${L.certifications}</h2>\n${certifications}` : ''}
 ${languages ? `<h2>${L.languages}</h2>\n<p>${languages}</p>` : ''}
 </body>
 </html>

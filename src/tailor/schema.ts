@@ -24,10 +24,12 @@ export const TailorConfigSchema = z.object({
       maxBulletsPerRole: z.number().int().min(1).max(10).default(5),
       maxProjects: z.number().int().min(0).max(6).default(2),
       maxSkills: z.number().int().min(3).max(40).default(14),
+      /** Certificates listed on the CV (only ones relevant to the job). */
+      maxCertifications: z.number().int().min(0).max(10).default(4),
       /** Warn when the rendered CV PDF is longer than this. */
       targetPages: z.number().int().min(1).max(4).default(1),
     })
-    .default({ maxBulletsPerRole: 5, maxProjects: 2, maxSkills: 14, targetPages: 1 }),
+    .default({ maxBulletsPerRole: 5, maxProjects: 2, maxSkills: 14, maxCertifications: 4, targetPages: 1 }),
   coverLetter: z
     .object({
       maxWords: z.number().int().min(80).max(600).default(280),
@@ -70,6 +72,7 @@ export const DraftSchema = z.object({
     .array(z.object({ id: z.string(), bullets: z.array(bullet) }))
     .describe('Every experience entry from the CV, by id, with its most relevant highlights'),
   projects: z.array(z.object({ id: z.string(), bullets: z.array(bullet) })).describe('Most relevant projects only'),
+  certifications: z.array(z.string()).describe("Ids of the candidate's certifications relevant to this job, most relevant first; empty if none are"),
   coverLetter: z.object({
     greeting: z.string(),
     paragraphs: z.array(sourced),
@@ -120,6 +123,8 @@ export interface TailoredContent {
   skills: string[];
   experience: Array<{ id: string; bullets: Array<{ source: string; text: string }> }>;
   projects: Array<{ id: string; bullets: Array<{ source: string; text: string }> }>;
+  /** Ids of your certificates shown on this CV. Absent in versions tailored before certificates existed. */
+  certifications?: string[];
   coverLetter: { greeting: string; paragraphs: string[]; closing: string; signOff: string };
   notes: { emphasized: string[]; requirementsNotMet: string[] };
   generatedAt: string;

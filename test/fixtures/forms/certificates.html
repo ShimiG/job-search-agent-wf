@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Beta – Integrations Developer</title></head><body>
+<form id="f">
+  <label for="n">Full name *</label><input id="n" name="name" required>
+  <label for="e">Email *</label><input id="e" name="email" type="email" required>
+  <label for="r">Resume *</label><input id="r" name="resume" type="file" required>
+  <label for="c">Certifications</label><input id="c" name="certifications" type="file" multiple accept=".pdf,.png">
+  <button type="submit">Submit application</button>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  if (!f.checkValidity()) return;
+  const data = {};
+  for (const el of f.elements) if (el.name) data[el.name] = el.type === 'file' ? [...el.files].map((x) => x.name) : el.value;
+  await fetch('/submit', { method: 'POST', body: JSON.stringify(data) });
+  location.href = '/thanks';
+});
+</script></body></html>

@@ -2,13 +2,14 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { BrowserContext, LaunchOptions, Page } from 'playwright-core';
 import type { MasterCv } from '../config.ts';
+import type { CertificateFile } from '../cv/certificates.ts';
 import type { JobStore, SubmissionRecord } from '../db/store.ts';
 import type { TailorConfig, TailoredContent } from '../tailor/schema.ts';
 import { SUBMIT_INPUT_STATUSES, type JobRow } from '../types.ts';
 import { sleep } from '../util/limiter.ts';
 import type { Logger } from '../util/logger.ts';
 import { buildProfile, detectPlatform, forModel, planDeterministic, resolveApplyUrl, type Documents } from './answers.ts';
-import { detectBlockers, detectConfirmation, extractFields, fillAnswer, fillCode, findCodeFields, findFormFrame, findSubmitButton, guardSubmit, highlight, pageMentionsTitle, revealForm } from './form.ts';
+import { detectBlockers, detectConfirmation, detectInvisibleCheck, extractFields, fillAnswer, fillCode, findCodeFields, findFormFrame, findSubmitButton, guardSubmit, highlight, pageMentionsTitle, revealForm } from './form.ts';
 import { applyMapped, type FieldMapper } from './llm.ts';
 import type { CodeSource } from './otp.ts';
 import { MODEL_SOURCES, type AnswersConfig, type PlannedAnswer, type SubmitConfig, type SubmitMode } from './schema.ts';
@@ -72,6 +73,8 @@ export interface SubmitDeps {
   logger: Logger;
   /** Reads emailed security codes (Greenhouse sends one after Submit). Without it, you type the code. */
   codes?: CodeSource | null;
+  /** Your uploaded certificates, attached only to a form field that asks for them. */
+  certificates?: CertificateFile[];
   /** Called in assist mode once the form is filled, before waiting for you to submit. */
   onAssist?: (info: AssistInfo) => Promise<void> | void;
   clock?: () => Date;
@@ -148,7 +151,7 @@ async function waitForConfirmation(page: Page, timeoutMs: number, pollMs: number
 
 /** Field list for the record: file paths shortened to names, everything else as filled. */
 const fieldsForRecord = (plan: PlannedAnswer[]) =>
-  plan.map((p) => ({ ...p, value: p.kind === 'file' && p.value ? path.basename(p.value) : p.value }));
+  plan.map((p) => ({ ...p, value: p.kind === 'file' && p.value ? p.value.split('\n').map((f) => path.basename(f)).join(', ') : p.value }));
 
 // ---------------------------------------------------------------- one job
 
@@ -175,7 +178,10 @@ export async function submitJob(job: JobRow, mode: SubmitMode, deps: SubmitDeps)
       createdAt: now().toISOString(),
     });
     const at = now().toISOString();
+    // Removed on the review page while this ran: it stays removed, unless it really was sent.
+    const removed = store.get(job.id)?.status === 'dismissed';
     if (outcome === 'submitted') store.setStatus(job.id, 'submitted', confirmation, 'submitter', at);
+    else if (removed) logger.info(`#${job.id}: removed by you meanwhile; left removed`);
     else if (outcome === 'needs_manual') store.setStatus(job.id, 'needs_manual', reason, 'submitter', at);
     else if (outcome === 'failed') {
       const failures = store.submissions(job.id).filter((s) => s.outcome === 'failed').length;
@@ -194,7 +200,7 @@ export async function submitJob(job: JobRow, mode: SubmitMode, deps: SubmitDeps)
   }
   if (!app) return finish('needs_manual', 'no tailored documents; run the Tailor first');
   const tailored = app.content as TailoredContent;
-  const documents = findDocuments(app.dir, tailored);
+  const documents = { ...findDocuments(app.dir, tailored), certificates: deps.certificates ?? [] };
   if (!documents.cvPdf) return finish('needs_manual', `no CV PDF in ${app.dir}; enable pdf in config/tailor.json and run "tailor render ${job.id}"`);
   const since = new Date(now().getTime() - 30 * 86_400_000).toISOString();
   const recent = store.recentSubmissionsToCompany(job.normCompany, since);
@@ -288,6 +294,9 @@ export async function submitJob(job: JobRow, mode: SubmitMode, deps: SubmitDeps)
       if (unresolved.length) stop.push(`${unresolved.length} required question(s) need you: ${unresolved.map((u) => `"${u.label}"`).join(', ')}`);
       const held = modelAnswers.filter((a) => cfg.autoSubmitModelAnswers === 'none' || (cfg.autoSubmitModelAnswers === 'facts' && a.source === 'model_draft'));
       if (held.length) stop.push(`${held.length} answer(s) were written by the model and need your review`);
+      // Clicking would look like success here while the site silently discards the application.
+      const invisible = await detectInvisibleCheck(frame);
+      if (invisible) stop.push(`the form has an invisible ${invisible} that quietly drops automated submissions, so Submit needs your click`);
       if (stop.length) return finish('needs_manual', `${stop.join('; ')}. Finish with: run --mode assist --job ${job.id}`);
 
       const submit = await findSubmitButton(frame);
@@ -342,10 +351,16 @@ export async function runSubmitter(deps: SubmitDeps, mode: SubmitMode, opts: { j
   const stats: SubmitRunStats = { attempted: 0, submitted: 0, prepared: 0, needsManual: 0, failed: 0 };
   // Auto never retries needs_manual jobs: those are waiting for you.
   const eligible = mode === 'auto' ? (['approved'] as const) : SUBMIT_INPUT_STATUSES;
-  const jobs = (opts.jobIds?.length ? opts.jobIds.map((id) => store.get(id)) : store.listByStatus(eligible))
+  const named = (opts.jobIds ?? []).map((id) => store.get(id)).filter((j): j is JobRow => Boolean(j));
+  const jobs = (opts.jobIds?.length ? named : store.listByStatus(eligible))
     .filter((j): j is JobRow => Boolean(j && eligible.includes(j.status)))
     .filter((j) => !store.submissions(j.id).some((s) => s.outcome === 'submitted'))
     .slice(0, deps.cfg.maxPerRun);
+  // Jobs asked for by id that won't run: say which and why, rather than a silent "nothing to submit".
+  for (const j of named.filter((j) => !jobs.includes(j))) {
+    const why = store.submissions(j.id).some((s) => s.outcome === 'submitted') ? 'already submitted' : `"${j.status}", and ${mode} mode only takes ${eligible.join(' or ')}`;
+    logger.warn(`#${j.id}: skipped: ${why}`);
+  }
   if (jobs.length === 0) {
     logger.info('Nothing to submit. Approve tailored jobs first: npm run tailor -- approve <id>');
     return stats;

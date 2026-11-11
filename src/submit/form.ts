@@ -99,6 +99,7 @@ const EXTRACT_SCRIPT = String.raw`(() => {
       name: el.getAttribute('name') || el.id || '',
       maxLength: el.maxLength > 0 ? el.maxLength : undefined,
       accept: el.getAttribute('accept') || undefined,
+      multiple: el.multiple || undefined,
     });
   }
   return fields;
@@ -122,7 +123,19 @@ const BLOCKER_SCRIPT = String.raw`(() => {
   return [...new Set(out)];
 })()`;
 
-const BODY_TEXT_SCRIPT = String.raw`(() => (document.body ? document.body.innerText : '').slice(0, 6000))()`;
+/*
+ * reCAPTCHA v3 (and v2 invisible) shows no puzzle, only a corner badge: it scores the visitor, and the
+ * form quietly drops a submission it judges automated. Checked in the form's own frame only: a badge
+ * guarding the host site's newsletter form says nothing about an embedded ATS form.
+ */
+const INVISIBLE_CHECK_SCRIPT = String.raw`(() => {
+  const scripts = [...document.scripts].map((s) => s.src || '');
+  if (document.querySelector('.grecaptcha-badge') || scripts.some((s) => /\/recaptcha\/(api|enterprise)\.js\?(.*&)?render=(?!explicit)/.test(s))) return 'reCAPTCHA';
+  if (document.querySelector('.h-captcha[data-size=invisible]')) return 'hCaptcha';
+  return null;
+})()`;
+
+const BODY_TEXT_SCRIPT =String.raw`(() => (document.body ? document.body.innerText : '').slice(0, 6000))()`;
 
 const CONFIRM_TEXT =
   /thank(s| you) for (applying|your application|your interest)|application (has been |was )?(submitted|received|sent)|we('ve| have) received your application|successfully (applied|submitted)|תודה על (הגשת|פנייתך|מועמדותך)|קיבלנו את (המועמדות|פנייתך)|спасибо за (отклик|заявку)/i;
@@ -164,6 +177,11 @@ export async function detectBlockers(page: Page): Promise<string[]> {
     for (const b of ((await frame.evaluate(BLOCKER_SCRIPT).catch(() => [])) as string[])) found.add(b);
   }
   return [...found];
+}
+
+/** An invisible human check on the form ("reCAPTCHA", "hCaptcha"), or null. Only a person's click gets through. */
+export async function detectInvisibleCheck(frame: Frame): Promise<string | null> {
+  return ((await frame.evaluate(INVISIBLE_CHECK_SCRIPT).catch(() => null)) as string | null) ?? null;
 }
 
 export async function detectConfirmation(page: Page): Promise<string | null> {
@@ -242,7 +260,8 @@ export async function fillAnswer(frame: Frame, field: FormField, answer: Planned
   try {
     switch (field.kind) {
       case 'file':
-        await el.first().setInputFiles(answer.value);
+        // Several certificates for one upload come as one path per line.
+        await el.first().setInputFiles(answer.value.split('\n'));
         break;
       case 'select': {
         const i = bestOption(field.options, answer.value);

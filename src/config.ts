@@ -120,8 +120,10 @@ export const SourcesSchema = z.object({
       /** How far back to look for confirmation emails. */
       applicationsSinceDays: z.number().int().min(1).default(365),
       feeds: z.array(EmailFeedSchema).default([]),
+      /** Re-open each LinkedIn alert job's public page on every run, and drop jobs that stopped taking applications. */
+      checkClosed: z.boolean().default(true),
     })
-    .default({ enabled: false, mailbox: 'INBOX', sinceDays: 3, trackApplications: true, applicationsSinceDays: 365, feeds: [] }),
+    .default({ enabled: false, mailbox: 'INBOX', sinceDays: 3, trackApplications: true, applicationsSinceDays: 365, feeds: [], checkClosed: true }),
 });
 export type SourcesConfig = z.infer<typeof SourcesSchema>;
 
@@ -162,6 +164,13 @@ export const MasterCvSchema = z.object({
     .default([]),
   languages: z.array(z.object({ language: z.string(), level: z.string() })).default([]),
   links: z.record(z.string(), z.string()).default({}),
+  /**
+   * Certificates you hold. Not kept in master-cv.json: the Tailor adds the ones you uploaded on the
+   * review page (see cv/certificates.ts), so they're checked and cited like the rest of your CV.
+   */
+  certifications: z
+    .array(z.object({ id: z.string(), name: z.string(), issuer: z.string().optional(), year: z.string().optional() }))
+    .optional(),
 });
 export type MasterCv = z.infer<typeof MasterCvSchema>;
 
@@ -175,6 +184,8 @@ export interface Paths {
   submit: string;
   applicationsDir: string;
   browserProfile: string;
+  /** Certificate files you uploaded, and their index. */
+  certificatesDir: string;
   db: string;
 }
 
@@ -191,6 +202,7 @@ export function resolvePaths(root = process.cwd()): Paths {
     submit: path.join(configDir, 'submit.json'),
     applicationsDir: path.join(dataDir, 'applications'),
     browserProfile: path.join(dataDir, 'browser-profile'),
+    certificatesDir: path.join(dataDir, 'certificates'),
     db: process.env.SCOUT_DB_PATH ? path.resolve(root, process.env.SCOUT_DB_PATH) : path.join(dataDir, 'scout.db'),
   };
 }

@@ -60,6 +60,8 @@ export function createImapCodeSource(credentials: ImapCredentials, logger: Logge
       auth: { user: credentials.user, pass: credentials.password },
       logger: false,
     });
+    // A dropped connection also rejects the pending call; without a listener the 'error' event kills the process.
+    client.on('error', (err: Error) => logger.debug(`security code IMAP: ${err.message}`));
     await client.connect();
     try {
       const lock = await client.getMailboxLock(mailbox, { readOnly: true });

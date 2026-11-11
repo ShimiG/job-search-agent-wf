@@ -244,6 +244,9 @@ export function createEmailAlertAdapter(opts: EmailAlertOptions): SourceAdapter 
         auth: { user: opts.credentials.user, pass: opts.credentials.password },
         logger: false,
       });
+      // A dropped connection also rejects the pending call (this source then fails on its own);
+      // without a listener the 'error' event would kill the whole run.
+      client.on('error', (err: Error) => opts.logger.debug(`email alerts IMAP: ${err.message}`));
       const since = new Date(Date.now() - opts.sinceDays * 86_400_000);
       const jobs: NormalizedJob[] = [];
       await client.connect();

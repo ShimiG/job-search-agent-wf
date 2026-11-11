@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, loadJsonFile, resolvePaths } from '../config.ts';
+import { withCertificates } from '../cv/certificates.ts';
 import { JobStore } from '../db/store.ts';
 import type { JobStatus } from '../types.ts';
 import { createLogger } from '../util/logger.ts';
@@ -74,7 +75,7 @@ async function main() {
     case 'run': {
       if (!process.env.ANTHROPIC_API_KEY) throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env.');
       const cfg = loadTailorConfig();
-      const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
+      const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
       const llm = new AnthropicTailor({ model: process.env.TAILOR_MODEL });
       const jobIds = values.job ? values.job.split(',').map((v) => parseId(v)) : undefined;
       const db = store();
@@ -177,7 +178,7 @@ async function main() {
     case 'render': {
       const id = parseId(args[0]);
       const cfg = loadTailorConfig();
-      const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
+      const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
       const db = store();
       try {
         const { app, report } = await withPdf(cfg.pdf.enabled && !values['no-pdf'], cfg.pdf.browserPath, (pdf) =>

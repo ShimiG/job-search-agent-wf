@@ -13,7 +13,8 @@ export interface AppliedEmail {
   title: string;
   /** LinkedIn's job ID, when the email links to the job. Matches alert-email jobs exactly. */
   linkedinId?: string;
-  via: 'linkedin' | 'indeed' | 'company';
+  /** "email": recorded by the Archiver from a reply, when nothing else had recorded the application. */
+  via: 'linkedin' | 'indeed' | 'company' | 'email';
   appliedAt: string;
   rejected: boolean;
   subject: string;
@@ -129,14 +130,18 @@ export function parseAppliedEmail(mail: RawEmail): AppliedEmail | null {
   }
   // Company names don't contain " – " or " | ": what follows is a tagline ("WSC Sports – Stay in the Game").
   company = trimName(company.replace(/\s[–—|]\s.*$/, ''));
-  // "the following privacy policies" is a phrase, not a company.
+  // "the following privacy policies" is a phrase, not a company; "taking the next steps in your
+  // career at Noma Security" is a sentence ending in one.
   if (/^the\s/.test(company)) company = '';
+  const at = /\bat\s+([^.!,]+)$/i.exec(company);
+  if (company.split(/\s+/).length >= 5) company = at ? tidy(at[1]!) : '';
   company ||= companyFromSender(mail.fromName);
   // Matches start at the first "for"/"to", so titles can carry the sentence in front of them.
-  title = trimName(title)
+  title = trimName(title.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, '').replace(/\s*@\s*.*$/, ''))
     .replace(/^(?:.*?\b)?(?:applying|apply|application)\s+(?:(?:for|to)\s+)?(?:the |a |an )?/i, '')
     .replace(new RegExp(`\\s+at\\s+${company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'), '');
-  if (/^(?:a|an|the|this|that|our|your)$/i.test(title)) title = '';
+  // "needs of this specific": a piece of a sentence, not a role's name (which starts with a capital).
+  if (/^(?:a|an|the|this|that|our|your)$/i.test(title) || (/^[a-z]/.test(title) && !/^[a-z][A-Z]/.test(title))) title = '';
   if (/^(?:a |an |the )?(?:position|role|job|opening)$/i.test(title) || title.length > 120 || normalizeForMatch(title) === normalizeForMatch(company)) {
     title = '';
   }

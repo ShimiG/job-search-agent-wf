@@ -37,6 +37,7 @@ export function sampleDraft(): Draft {
       { id: 'ticket-router', bullets: [{ source: 'ticket-router-pipeline', text: 'Built a multi-source job discovery agent with ATS adapters, deterministic filters, cross-source dedupe and LLM scoring' }] },
       { id: 'ghost-project', bullets: [{ source: 'x', text: 'nope' }] },
     ],
+    certifications: [],
     coverLetter: {
       greeting: 'Dear Acme hiring team,',
       paragraphs: [

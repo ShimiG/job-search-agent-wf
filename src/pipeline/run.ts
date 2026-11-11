@@ -9,7 +9,7 @@ import { mapWithConcurrency } from '../util/limiter.ts';
 import { enrichCost, type Enricher } from '../llm/enrich.ts';
 import type { AppliedEmail } from '../sources/applications.ts';
 import { linkedinIdClock, linkedinJobId } from './age.ts';
-import { checkPostingPage, type PageCheck } from './closed.ts';
+import { checkLinkedInJob, checkPostingPage, isLinkedInJob, type PageCheck } from './closed.ts';
 import { recordApplications } from './applied.ts';
 import { decideDuplicate } from './dedupe.ts';
 import { applyHardFilters } from './filters.ts';
@@ -28,6 +28,8 @@ export interface RunDeps {
   enricher?: Enricher;
   /** Re-checks found posting pages. Tests replace it; defaults to a plain HTTP check. */
   checkPage?: (url: string) => Promise<PageCheck>;
+  /** Re-opens LinkedIn alert jobs' public pages. Tests replace it; null turns it off (emailAlerts.checkClosed). */
+  checkLinkedIn?: ((url: string) => Promise<PageCheck>) | null;
   clock?: () => Date;
 }
 
@@ -161,15 +163,35 @@ function dropOldAlertJobs(deps: RunDeps, stats: RunStats, clock: () => Date) {
 async function dropClosedPostings(deps: RunDeps, stats: RunStats, iso: () => string) {
   const { store, logger } = deps;
   const check = deps.checkPage ?? checkPostingPage;
-  const jobs = store.listByStatus(['shortlisted', 'low_score']).filter((j) => j.enrichedAt && (j.postingUrl || j.applyUrl));
-  for (const job of jobs) {
-    const page = job.applyUrl ?? job.postingUrl!;
-    if ((await check(page)) !== 'closed') continue;
+  const closeIt = (job: JobRow, page: string) => {
     store.markClosed(job.id, `no longer accepting applications (${page})`, iso());
     stats.closedPostings++;
     logger.info(`#${job.id} ${job.company} — ${job.title}: no longer accepting applications`);
+  };
+  const jobs = store.listByStatus(['shortlisted', 'low_score']).filter((j) => j.enrichedAt && (j.postingUrl || j.applyUrl));
+  for (const job of jobs) {
+    const page = job.applyUrl ?? job.postingUrl!;
+    if ((await check(page)) === 'closed') closeIt(job, page);
+  }
+
+  // LinkedIn alert jobs say so on their public page. Checked for jobs in your hands, from the
+  // shortlist to one stuck in Sending, a few dozen a run and unhurried, so LinkedIn sees a reader.
+  if (deps.checkLinkedIn === null) return;
+  const checkLinkedIn = deps.checkLinkedIn ?? checkLinkedInJob;
+  const alerts = store
+    .listByStatus(LINKEDIN_CHECK_STATUSES)
+    .filter((j) => j.source === 'email' && isLinkedInJob(j.url) && !j.closedAt)
+    .slice(0, LINKEDIN_CHECKS_PER_RUN);
+  for (const [i, job] of alerts.entries()) {
+    if (i > 0 && !deps.checkLinkedIn) await new Promise((r) => setTimeout(r, LINKEDIN_PAUSE_MS));
+    if ((await checkLinkedIn(job.url)) === 'closed') closeIt(job, job.url);
   }
 }
+
+/** Where a LinkedIn alert job is worth a look: yours to act on, not yet sent. */
+const LINKEDIN_CHECK_STATUSES: readonly JobRow['status'][] = ['shortlisted', 'selected', 'tailor_error', 'tailored', 'approved', 'needs_manual', 'failed'];
+const LINKEDIN_CHECKS_PER_RUN = 40;
+const LINKEDIN_PAUSE_MS = 1500;
 
 /** Step 1b: jobs you applied to yourself leave Scout's queue before they're filtered or scored. */
 async function markApplied(deps: RunDeps, stats: RunStats, iso: () => string) {
@@ -231,26 +253,36 @@ export function cutoff(job: Pick<JobRow, 'descriptionIsPartial'>, prefs: Prefere
   return job.descriptionIsPartial ? (partialThreshold ?? threshold) : threshold;
 }
 
+/** Where a scored job goes. One you added yourself stays on your shortlist: you chose it, the score only informs. */
+export function placeByScore(job: Pick<JobRow, 'descriptionIsPartial' | 'source'>, score: number, prefs: Preferences): 'shortlisted' | 'low_score' {
+  return job.source === 'manual' || score >= cutoff(job, prefs) ? 'shortlisted' : 'low_score';
+}
+
 /**
  * Re-sorts already-scored jobs against the current cutoffs, so editing a threshold takes effect on the
  * next run without paying to score anything again. Only touches jobs still in Scout's hands.
  */
 function applyThresholds(deps: RunDeps, iso: () => string) {
-  const { store, prefs, logger } = deps;
+  const { up, down } = resortByCutoff(deps.store, deps.prefs, iso());
+  if (up || down) deps.logger.info(`Thresholds: ${up} job(s) moved onto your shortlist, ${down} off it`);
+}
+
+/** Moves scored jobs onto or off your shortlist by the current cutoffs. Also run when you change them in Settings. */
+export function resortByCutoff(store: JobStore, prefs: Preferences, now: string): { up: number; down: number } {
   let up = 0;
   let down = 0;
   store.db.transaction(() => {
     for (const job of store.listByStatus(['shortlisted', 'low_score'])) {
       if (job.score === null) continue;
-      const should = job.score >= cutoff(job, prefs) ? 'shortlisted' : 'low_score';
+      const should = placeByScore(job, job.score, prefs);
       if (should === job.status) continue;
       const kind = job.descriptionIsPartial ? 'partial posting, ' : '';
-      store.setStatus(job.id, should, `${kind}score ${job.score}, cutoff ${cutoff(job, prefs)}`, 'scout', iso());
+      store.setStatus(job.id, should, `${kind}score ${job.score}, cutoff ${cutoff(job, prefs)}`, 'scout', now);
       if (should === 'shortlisted') up++;
       else down++;
     }
   })();
-  if (up || down) logger.info(`Thresholds: ${up} job(s) moved onto your shortlist, ${down} off it`);
+  return { up, down };
 }
 
 /**
@@ -296,8 +328,8 @@ async function enrichShortlist(deps: RunDeps, enricher: Enricher, scorer: Scorer
         continue;
       }
       const result = await scorer.score(full);
-      const status = result.score >= cutoff(full, prefs) ? 'shortlisted' : 'low_score';
-      store.saveScore(job.id, result, status, iso());
+      const status = placeByScore(full, result.score, prefs);
+      store.saveScore(job.id, result, status, iso(), scorer.model ?? null);
       logger.info(`#${job.id} ${job.company} — ${job.title}: full posting found, score ${job.score} → ${result.score}${status === 'low_score' ? ' (off your shortlist)' : ''}`);
     } catch (err) {
       // Left without enriched_at, so it's tried again next run.
@@ -316,8 +348,8 @@ async function score(deps: RunDeps, scorer: Scorer, stats: RunStats, iso: () => 
   await mapWithConcurrency(queue, concurrency, async (job) => {
     try {
       const result = await scorer.score(job);
-      const status = result.score >= cutoff(job, prefs) ? 'shortlisted' : 'low_score';
-      store.saveScore(job.id, result, status, iso());
+      const status = placeByScore(job, result.score, prefs);
+      store.saveScore(job.id, result, status, iso(), scorer.model ?? null);
       stats.scored++;
       if (status === 'shortlisted') stats.shortlisted++;
       else stats.lowScore++;

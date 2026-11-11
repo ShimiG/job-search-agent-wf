@@ -64,8 +64,9 @@ describe('runScout', () => {
     logger: silentLogger,
     scorer,
     clock: () => clock,
-    // Never the network: found posting pages are re-checked over HTTP otherwise.
+    // Never the network: found posting pages and LinkedIn alert pages are re-checked over HTTP otherwise.
     checkPage: async () => 'unknown',
+    checkLinkedIn: async () => 'unknown',
     ...overrides,
   });
 
@@ -289,6 +290,35 @@ describe('runScout', () => {
     assert.equal(job.status, 'filtered_out');
     assert.ok(job.closedAt);
     assert.equal(store.listByStatus(['shortlisted']).length, 0);
+  });
+
+  it("closes a LinkedIn alert job whose public page says it stopped taking applications, wherever it is", async () => {
+    const now = clock.toISOString();
+    const li = (n: number) => `https://www.linkedin.com/jobs/view/${n}/`;
+    const alert = (n: number, status: 'selected' | 'needs_manual' | 'submitted' | 'low_score') => {
+      const { id } = store.upsert(makeJob({ source: 'email', externalId: `linkedin:${n}`, url: li(n), title: `Engineer ${n}`, descriptionIsPartial: true }), now);
+      store.setStatus(id, status, null, 'user', now);
+      return id;
+    };
+    const [picked, stuck, sent, low] = [alert(1, 'selected'), alert(2, 'needs_manual'), alert(3, 'submitted'), alert(4, 'low_score')];
+    const asked: string[] = [];
+    const checkLinkedIn = async (url: string): Promise<'open' | 'closed'> => {
+      asked.push(url);
+      return url === li(2) || url === li(3) ? 'closed' : 'open';
+    };
+    const stats = await runScout(deps([], { checkLinkedIn }));
+    assert.deepEqual(asked.sort(), [li(1), li(2)], 'sent and below-cutoff jobs are not looked at');
+    assert.equal(stats.closedPostings, 1);
+    assert.equal(store.get(stuck)!.status, 'filtered_out');
+    assert.ok(store.get(stuck)!.closedAt);
+    assert.equal(store.get(picked)!.status, 'selected');
+    assert.equal(store.get(sent)!.status, 'submitted');
+    assert.equal(store.get(low)!.status, 'low_score');
+
+    // Turned off in config: nothing is opened.
+    asked.length = 0;
+    await runScout(deps([], { checkLinkedIn: null }));
+    assert.equal(asked.length, 0);
   });
 
   it('retries scoring errors up to maxAttempts', async () => {

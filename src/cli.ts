@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import {
   ConfigError,
   MasterCvSchema,
+  type MasterCv,
   PreferencesSchema,
   SourcesSchema,
   imapCredentialsFromEnv,
@@ -14,10 +15,15 @@ import {
   type Paths,
 } from './config.ts';
 import { JobStore } from './db/store.ts';
+import { removeJob } from './decisions.ts';
 import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
+import { withCertificates } from './cv/certificates.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
-import { AnthropicScorer } from './llm/scorer.ts';
+import { compareWithClaude, formatComparison } from './llm/compare.ts';
+import { ollamaModel } from './llm/ollama.ts';
+import { archive } from './archiver/run.ts';
+import { createScorer, scorerProblem } from './llm/scorer.ts';
 import { appliedEmailsSource } from './sources/applications.ts';
 import { formatJobDetail, formatJobList, formatMarkdown, formatRunStats } from './output/report.ts';
 import { runScout } from './pipeline/run.ts';
@@ -44,11 +50,14 @@ Commands:
   show <id>                    Full details, score breakdown and history for one job
   pick <id...>                 Send jobs to the Tailor agent (status → selected)
   dismiss <id...>              Drop jobs you don't want (status → dismissed)
+  remove <id...>               Take jobs off every list, at any stage (sent ones are archived instead)
   sources                      Configured sources and their last fetch result
   add-source <careers-url> [--company "Name"] [--token T]
                                Detect the ATS from a careers URL and add it to sources.json
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
   watch [--cron "0 8 * * *"]   Keep running and do a full run on a schedule
+  archive                      Archiver: sort new replies to your applications and update data/applications-report.md
+  compare-scorers [--limit 40] Re-score jobs Claude scored with Gemma (Ollama) and compare
 `;
 
 function loadEnv(root: string) {
@@ -95,21 +104,46 @@ function buildAdapters(paths: Paths, logger: Logger): SourceAdapter[] {
   return adapters;
 }
 
+async function commandCompareScorers(paths: Paths, logger: Logger, size: number) {
+  const model = ollamaModel(process.env.COMPARE_MODEL ?? 'ollama:gemma3:12b')!;
+  const problem = await scorerProblem(`ollama:${model}`);
+  if (problem) throw new ConfigError(problem);
+  const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
+  const scored = withStore(paths, (store) => store.listClaudeScored());
+  logger.info(`Re-scoring up to ${size} of the ${scored.length} jobs Claude scored with ${model}. Nothing is saved to the jobs.`);
+  const { comparison, pairs, secondsPerJob } = await compareWithClaude({
+    cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir),
+    prefs,
+    model,
+    scored,
+    size,
+    log: (msg) => logger.info(msg),
+  });
+  const report = formatComparison(comparison, model, secondsPerJob, pairs);
+  const file = path.join(path.dirname(paths.db), 'scorer-comparison.md');
+  writeFileSync(file, report);
+  console.log('\n' + report.split('\n## All jobs')[0]);
+  console.log(`Full report: ${file}`);
+}
+
 async function commandRun(paths: Paths, logger: Logger, noScore: boolean) {
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
-  let scorer: AnthropicScorer | undefined;
+  const model = process.env.SCOUT_MODEL;
+  let cv: MasterCv | undefined;
   if (!noScore) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      throw new ConfigError('ANTHROPIC_API_KEY is not set. Add it to .env, or run with --no-score to skip scoring.');
-    }
-    const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
-    scorer = new AnthropicScorer({ cv, prefs, model: process.env.SCOUT_MODEL });
+    const problem = await scorerProblem(model);
+    if (problem) throw new ConfigError(`${problem}, or run with --no-score to skip scoring.`);
+    // Certificates you uploaded count too: "AWS certification required" is met if you hold it.
+    cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
   }
   const store = new JobStore(paths.db);
   try {
-    const applied = appliedEmailsSource(loadJsonFile(paths.sources, SourcesSchema).emailAlerts, imapCredentialsFromEnv());
-    const enricher = scorer && prefs.enrich.enabled ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
-    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher });
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored() });
+    const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
+    const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
+    // The web lookup is Claude's, so it needs the API key even when scoring is local.
+    const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL }) : undefined;
+    const stats = await runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });
     console.log('\n' + formatRunStats(stats));
     const shortlist = store.listByStatus(['shortlisted']);
     if (shortlist.length) console.log(`\n${shortlist.length} jobs on your shortlist. See them with: npm run scout -- list`);
@@ -320,6 +354,22 @@ async function main() {
       return commandTransition(paths, parseIds(args), 'selected');
     case 'dismiss':
       return commandTransition(paths, parseIds(args), 'dismissed');
+    case 'remove': {
+      const store = new JobStore(paths.db);
+      try {
+        for (const id of parseIds(args)) {
+          try {
+            const { from } = removeJob(store, id);
+            console.log(`#${id}: removed (was "${from}")`);
+          } catch (err) {
+            console.log(`#${id}: ${(err as Error).message}`);
+          }
+        }
+      } finally {
+        store.close();
+      }
+      return;
+    }
     case 'sources':
       return commandSources(paths);
     case 'add-source':
@@ -334,6 +384,17 @@ async function main() {
       }
       return;
     }
+    case 'archive': {
+      const busy = withStore(paths, (store) => store.latestRun('archiver'));
+      if (busy && !busy.finishedAt && Date.now() - Date.parse(busy.startedAt) < 2 * 3_600_000) {
+        logger.info(`The Archiver is already running (started ${busy.startedAt}); skipping this run.`);
+        return;
+      }
+      await archive(paths, logger);
+      return;
+    }
+    case 'compare-scorers':
+      return commandCompareScorers(paths, logger, Number(values.limit ?? 40));
     case 'watch':
       return commandWatch(paths, logger, String(values.cron ?? '0 8 * * *'), noScore);
     default:

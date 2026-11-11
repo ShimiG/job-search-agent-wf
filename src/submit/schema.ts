@@ -81,6 +81,8 @@ export interface FormField {
   name: string;
   maxLength?: number;
   accept?: string;
+  /** A file input that takes several files at once. */
+  multiple?: boolean;
 }
 
 export type AnswerSource =

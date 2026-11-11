@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { JobRow, JobStatus, NormalizedJob, ScoreResult } from '../types.ts';
 import { isScoutOwned } from '../types.ts';
@@ -116,7 +116,81 @@ const MIGRATIONS: string[] = [
   ALTER TABLE jobs ADD COLUMN posting_url TEXT;
   UPDATE jobs SET posting_url = apply_url, apply_url = NULL WHERE enriched_at IS NOT NULL AND description_is_partial = 0;
   `,
+  // 6: Which model gave each score, so a local model can learn from Claude's scores. Everything
+  // scored before this was scored by Claude.
+  `
+  ALTER TABLE jobs ADD COLUMN scored_by TEXT;
+  UPDATE jobs SET scored_by = 'claude' WHERE score IS NOT NULL;
+  `,
+  // 7: Archiver. Every email it read about an application (or decided wasn't one), so none is read twice.
+  `
+  CREATE TABLE responses (
+    id           INTEGER PRIMARY KEY,
+    message_id   TEXT NOT NULL UNIQUE,
+    job_id       INTEGER REFERENCES jobs(id),
+    received_at  TEXT NOT NULL,
+    from_name    TEXT NOT NULL,
+    from_address TEXT NOT NULL,
+    subject      TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    company      TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+  );
+  CREATE INDEX idx_responses_job ON responses(job_id);
+
+  CREATE TABLE kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
+  // 8: An application's stage set by hand (it wins until a newer reply arrives), and what an
+  // auto-archived application was before, so it can be restored.
+  `
+  ALTER TABLE jobs ADD COLUMN outcome TEXT;
+  ALTER TABLE jobs ADD COLUMN outcome_at TEXT;
+  ALTER TABLE jobs ADD COLUMN archived_from TEXT;
+  `,
+  // 9: Your choice to send a sent application to the Archive ('archived') or keep it in Applied ('applied').
+  `
+  ALTER TABLE jobs ADD COLUMN archive_choice TEXT;
+  `,
 ];
+
+export interface ResponseRecord {
+  id: number;
+  messageId: string;
+  jobId: number | null;
+  receivedAt: string;
+  fromName: string;
+  fromAddress: string;
+  subject: string;
+  kind: string;
+  company: string;
+  title: string;
+  summary: string;
+  action: string;
+  model: string;
+}
+
+/** A job you applied to: when, and how (this tool, LinkedIn, Indeed, the company's site, marked by you). */
+export interface SentApplication {
+  job: JobRow;
+  appliedAt: string;
+  via: string;
+  /** A stage you set by hand, and when. */
+  outcome: { stage: string; at: string } | null;
+  /** You sent it to the Archive, or kept it in Applied. null: the rules decide. */
+  archiveChoice: ArchiveChoice | null;
+}
+
+export type ArchiveChoice = 'archived' | 'applied';
+
+/** Statuses of an application on its way to being sent. */
+export const UNSENT_STATUSES: readonly JobStatus[] = ['selected', 'tailored', 'tailor_error', 'approved', 'needs_manual', 'failed'];
 
 export interface SubmissionRecord {
   id: number;
@@ -242,18 +316,33 @@ function toJobRow(r: DbJobRow): JobRow {
 
 export type UpsertOutcome = 'inserted' | 'changed' | 'unchanged';
 
-export type Actor = 'scout' | 'user' | 'tailor' | 'submitter';
+export type Actor = 'scout' | 'user' | 'tailor' | 'submitter' | 'archiver';
 
 export class JobStore {
   readonly db: Database.Database;
 
+  /** The data folder, for finding files whose saved path predates a move of the project folder. */
+  private readonly dataDir: string | null;
+
   constructor(file: string) {
+    this.dataDir = file === ':memory:' ? null : path.dirname(path.resolve(file));
     if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
     this.db = new Database(file);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
     this.migrate();
+  }
+
+  /**
+   * Paths are saved in full, so renaming or moving the project folder breaks them. A path into an
+   * old data/applications folder is found again under the current one.
+   */
+  private relocate(saved: string): string {
+    if (!this.dataDir || existsSync(saved)) return saved;
+    const marker = `${path.sep}data${path.sep}applications${path.sep}`;
+    const at = saved.lastIndexOf(marker);
+    return at < 0 ? saved : path.join(this.dataDir, 'applications', saved.slice(at + marker.length));
   }
 
   close(): void {
@@ -365,13 +454,21 @@ export class JobStore {
     this.recordHistory(id, row.status, to, reason, actor, now);
   }
 
-  saveScore(id: number, result: ScoreResult, status: 'shortlisted' | 'low_score', now: string): void {
+  saveScore(id: number, result: ScoreResult, status: 'shortlisted' | 'low_score', now: string, scoredBy: string | null = null): void {
     this.db
       .prepare(
-        `UPDATE jobs SET score = ?, score_json = ?, scored_at = ?, score_attempts = score_attempts + 1 WHERE id = ?`,
+        `UPDATE jobs SET score = ?, score_json = ?, scored_at = ?, scored_by = ?, score_attempts = score_attempts + 1 WHERE id = ?`,
       )
-      .run(result.score, JSON.stringify(result), now, id);
+      .run(result.score, JSON.stringify(result), now, scoredBy, id);
     this.setStatus(id, status, `score ${result.score}`, 'scout', now);
+  }
+
+  /** Jobs Claude scored, for teaching a local model its calibration and for comparing the two. */
+  listClaudeScored(): Array<{ job: JobRow; result: ScoreResult }> {
+    const rows = this.db
+      .prepare(`SELECT * FROM jobs WHERE score_json IS NOT NULL AND scored_by LIKE 'claude%' AND duplicate_of IS NULL ORDER BY score, id`)
+      .all() as DbJobRow[];
+    return rows.map(toJobRow).map((job) => ({ job, result: job.scoreDetails! }));
   }
 
   recordScoreError(id: number, message: string, now: string): void {
@@ -484,15 +581,28 @@ export class JobStore {
     this.setStatus(id, 'filtered_out', reason, 'scout', now);
   }
 
-  /** Puts every Scout-owned job (except duplicates) back through filters and scoring. */
+  /**
+   * Puts every Scout-owned job (except duplicates) back through filters and scoring. Jobs you added
+   * yourself skip the filters: they're only scored again.
+   */
   requeueForReevaluation(now: string): number {
-    const ids = this.db
-      .prepare(`SELECT id FROM jobs WHERE status IN ('filtered_out','queued','score_error','low_score','shortlisted')`)
-      .all() as Array<{ id: number }>;
+    const rows = this.db
+      .prepare(`SELECT id, source FROM jobs WHERE status IN ('filtered_out','queued','score_error','low_score','shortlisted')`)
+      .all() as Array<{ id: number; source: string }>;
     this.db.transaction(() => {
-      for (const { id } of ids) this.setStatus(id, 'discovered', 'manual re-evaluation', 'scout', now, { resetScore: true });
+      for (const { id, source } of rows) {
+        this.setStatus(id, source === 'manual' ? 'queued' : 'discovered', 'manual re-evaluation', 'scout', now, { resetScore: true });
+      }
     })();
-    return ids.length;
+    return rows.length;
+  }
+
+  /** A job whose link, application page or full posting is this URL. */
+  findByUrl(url: string): JobRow | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM jobs WHERE url = ? OR apply_url = ? OR posting_url = ? ORDER BY id DESC LIMIT 1')
+      .get(url, url, url) as DbJobRow | undefined;
+    return row ? toJobRow(row) : undefined;
   }
 
   statusCounts(): Record<string, number> {
@@ -546,7 +656,7 @@ export class JobStore {
     const r = this.db
       .prepare('SELECT * FROM applications WHERE job_id = ? ORDER BY version DESC LIMIT 1')
       .get(jobId) as DbApplicationRow | undefined;
-    return r ? toApplication(r) : undefined;
+    return r ? { ...toApplication(r), dir: this.relocate(r.dir) } : undefined;
   }
 
   saveSubmission(sub: Omit<SubmissionRecord, 'id'>): SubmissionRecord {
@@ -573,7 +683,7 @@ export class JobStore {
       applyUrl: (r.apply_url as string | null) ?? null,
       reason: (r.reason as string | null) ?? null,
       fields: JSON.parse((r.fields_json as string | null) ?? 'null'),
-      screenshots: JSON.parse((r.screenshots_json as string | null) ?? '[]'),
+      screenshots: (JSON.parse((r.screenshots_json as string | null) ?? '[]') as string[]).map((f) => this.relocate(f)),
       confirmation: (r.confirmation as string | null) ?? null,
       createdAt: r.created_at as string,
     }));
@@ -630,5 +740,116 @@ export class JobStore {
 
   finishRun(id: number, stats: unknown, now: string): void {
     this.db.prepare('UPDATE runs SET finished_at = ?, stats_json = ? WHERE id = ?').run(now, JSON.stringify(stats), id);
+  }
+
+  hasResponse(messageId: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM responses WHERE message_id = ?').get(messageId));
+  }
+
+  saveResponse(r: Omit<ResponseRecord, 'id'>, now: string): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO responses (message_id, job_id, received_at, from_name, from_address, subject, kind, company, title, summary, action, model, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(r.messageId, r.jobId, r.receivedAt, r.fromName, r.fromAddress, r.subject, r.kind, r.company, r.title, r.summary, r.action, r.model, now);
+  }
+
+  /** Emails about your applications, oldest first. Ones that weren't about an application are left out. */
+  responses(): ResponseRecord[] {
+    const rows = this.db.prepare(`SELECT * FROM responses WHERE kind != 'not_related' ORDER BY received_at, id`).all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as number,
+      messageId: r.message_id as string,
+      jobId: (r.job_id as number | null) ?? null,
+      receivedAt: r.received_at as string,
+      fromName: r.from_name as string,
+      fromAddress: r.from_address as string,
+      subject: r.subject as string,
+      kind: r.kind as string,
+      company: r.company as string,
+      title: r.title as string,
+      summary: r.summary as string,
+      action: r.action as string,
+      model: r.model as string,
+    }));
+  }
+
+  setResponseJob(id: number, jobId: number | null): void {
+    this.db.prepare('UPDATE responses SET job_id = ? WHERE id = ?').run(jobId, id);
+  }
+
+  sentApplications(): SentApplication[] {
+    const rows = this.db
+      .prepare(
+        `SELECT j.*, s.created_at AS applied_at, s.mode AS sub_mode, s.reason AS sub_reason
+           FROM jobs j JOIN submissions s ON s.id = (SELECT MIN(id) FROM submissions WHERE job_id = j.id AND outcome = 'submitted')
+          WHERE j.status = 'submitted'
+          ORDER BY s.created_at DESC`,
+      )
+      .all() as Array<DbJobRow & { applied_at: string; sub_mode: string; sub_reason: string | null; outcome: string | null; outcome_at: string | null; archive_choice: ArchiveChoice | null }>;
+    return rows.map((r) => {
+      const reason = r.sub_reason ?? '';
+      const via =
+        r.sub_mode !== 'manual' ? 'this tool'
+        : /on LinkedIn/.test(reason) ? 'LinkedIn'
+        : /on Indeed/.test(reason) ? 'Indeed'
+        : /on the company site/.test(reason) ? 'company site'
+        : /per your email/.test(reason) ? 'from your email'
+        : 'marked by you';
+      return { job: toJobRow(r), appliedAt: r.applied_at, via, outcome: r.outcome && r.outcome_at ? { stage: r.outcome, at: r.outcome_at } : null, archiveChoice: r.archive_choice ?? null };
+    });
+  }
+
+  /** Sends these job records' application to the Archive, keeps it in Applied, or (null) leaves it to the rules. */
+  setArchiveChoice(ids: number[], choice: ArchiveChoice | null, now: string): void {
+    const stmt = this.db.prepare('UPDATE jobs SET archive_choice = ?, updated_at = ? WHERE id = ?');
+    this.db.transaction(() => ids.forEach((id) => stmt.run(choice, now, id)))();
+  }
+
+  /** Sets (or with null clears) the stage you gave these applications by hand. */
+  setOutcome(ids: number[], stage: string | null, now: string): void {
+    const stmt = this.db.prepare('UPDATE jobs SET outcome = ?, outcome_at = ?, updated_at = ? WHERE id = ?');
+    this.db.transaction(() => ids.forEach((id) => stmt.run(stage, stage ? now : null, now, id)))();
+  }
+
+  /**
+   * Applications not sent and untouched (no status change) for `days`: moved to the archive, keeping
+   * what they were so they can be restored. Returns the archived jobs.
+   */
+  archiveStale(days: number, now: Date): JobRow[] {
+    const cutoffIso = new Date(now.getTime() - days * 86_400_000).toISOString();
+    const marks = UNSENT_STATUSES.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT j.* FROM jobs j
+          WHERE j.status IN (${marks})
+            AND COALESCE((SELECT MAX(at) FROM status_history h WHERE h.job_id = j.id), j.updated_at) < ?`,
+      )
+      .all(...UNSENT_STATUSES, cutoffIso) as DbJobRow[];
+    const iso = now.toISOString();
+    for (const r of rows) {
+      this.db.prepare('UPDATE jobs SET archived_from = ? WHERE id = ?').run(r.status, r.id);
+      this.setStatus(r.id, 'archived', `not sent, no change for ${days} days`, 'archiver', iso);
+    }
+    return rows.map(toJobRow);
+  }
+
+  /** Puts an archived application back where it was. */
+  restoreArchived(id: number, now: string): JobStatus {
+    const row = this.db.prepare('SELECT status, archived_from FROM jobs WHERE id = ?').get(id) as { status: string; archived_from: string | null } | undefined;
+    if (!row || row.status !== 'archived') throw new Error(`#${id} isn't archived`);
+    const to = (row.archived_from ?? 'selected') as JobStatus;
+    this.setStatus(id, to, 'restored from the archive', 'user', now);
+    this.db.prepare('UPDATE jobs SET archived_from = NULL WHERE id = ?').run(id);
+    return to;
+  }
+
+  getKv(key: string): string | undefined {
+    return (this.db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined)?.value;
+  }
+
+  setKv(key: string, value: string): void {
+    this.db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
   }
 }

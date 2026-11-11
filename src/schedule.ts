@@ -11,6 +11,10 @@ import path from 'node:path';
  *   npm run schedule -- on 08:00 [--days sun-thu]   install or change it (default: every day)
  *   npm run schedule -- status       when it runs, and the end of its log
  *   npm run schedule -- off          remove it
+ *
+ * The Archiver runs every hour instead, reading new replies to your applications:
+ *
+ *   npm run schedule -- archiver on | off | status
  */
 
 const LABEL = 'com.job-agents.scout';
@@ -63,10 +67,37 @@ ${args.map((a) => `    <string>${xml(a)}</string>`).join('\n')}
 `;
 }
 
+const ARCHIVER_LABEL = 'com.job-agents.archiver';
+const ARCHIVER_PLIST = path.join(os.homedir(), 'Library', 'LaunchAgents', `${ARCHIVER_LABEL}.plist`);
+const ARCHIVER_LOG = path.join(ROOT, 'data', 'logs', 'archiver-schedule.log');
+
+function archiverPlist(): string {
+  const args = [process.execPath, '--import', 'tsx', path.join(ROOT, 'src', 'cli.ts'), 'archive'];
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${ARCHIVER_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+${args.map((a) => `    <string>${xml(a)}</string>`).join('\n')}
+  </array>
+  <key>WorkingDirectory</key><string>${xml(ROOT)}</string>
+  <key>StartCalendarInterval</key><dict><key>Minute</key><integer>5</integer></dict>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>${xml(path.dirname(process.execPath))}:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardOutPath</key><string>${xml(ARCHIVER_LOG)}</string>
+  <key>StandardErrorPath</key><string>${xml(ARCHIVER_LOG)}</string>
+</dict>
+</plist>
+`;
+}
+
 const launchctl = (...args: string[]) => execFileSync('launchctl', args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
-const unload = () => {
+const unload = (label = LABEL) => {
   try {
-    launchctl('bootout', `${DOMAIN}/${LABEL}`);
+    launchctl('bootout', `${DOMAIN}/${label}`);
   } catch {
     // Not loaded: nothing to remove.
   }
@@ -111,13 +142,39 @@ function status() {
   if (existsSync(LOG)) console.log(`\nEnd of ${LOG}:\n` + readFileSync(LOG, 'utf8').trim().split('\n').slice(-12).join('\n'));
 }
 
+function archiver(command: string | undefined) {
+  if (command === 'on') {
+    mkdirSync(path.dirname(ARCHIVER_PLIST), { recursive: true });
+    mkdirSync(path.dirname(ARCHIVER_LOG), { recursive: true });
+    writeFileSync(ARCHIVER_PLIST, archiverPlist());
+    unload(ARCHIVER_LABEL);
+    launchctl('bootstrap', DOMAIN, ARCHIVER_PLIST);
+    console.log(`The Archiver will check your email every hour at :05, starting now.\nLog: ${ARCHIVER_LOG}`);
+  } else if (command === 'off') {
+    unload(ARCHIVER_LABEL);
+    if (existsSync(ARCHIVER_PLIST)) rmSync(ARCHIVER_PLIST);
+    console.log('Hourly Archiver run removed.');
+  } else if (command === 'status') {
+    if (!existsSync(ARCHIVER_PLIST)) return console.log('The Archiver is not scheduled. Set it with: npm run schedule -- archiver on');
+    let loaded = true;
+    try {
+      launchctl('print', `${DOMAIN}/${ARCHIVER_LABEL}`);
+    } catch {
+      loaded = false;
+    }
+    console.log(`Every hour · ${loaded ? 'active' : 'installed but not loaded (run "archiver on" again)'}`);
+    if (existsSync(ARCHIVER_LOG)) console.log(`\nEnd of ${ARCHIVER_LOG}:\n` + readFileSync(ARCHIVER_LOG, 'utf8').trim().split('\n').slice(-12).join('\n'));
+  } else console.log('Usage: npm run schedule -- archiver on | off | status');
+}
+
 const argv = process.argv.slice(2);
 const daysAt = argv.indexOf('--days');
 const daySpec = daysAt >= 0 ? argv.splice(daysAt, 2)[1] : undefined;
 const [command, arg] = argv;
 try {
   if (process.platform !== 'darwin') throw new Error('Scheduling uses launchd, which is macOS only. Elsewhere use "npm run scout -- watch".');
-  if (command === 'on') on(arg, daySpec);
+  if (command === 'archiver') archiver(arg);
+  else if (command === 'on') on(arg, daySpec);
   else if (command === 'off') off();
   else if (command === 'status') status();
   else console.log('Usage: npm run schedule -- on [HH:MM] [--days sun-thu] | off | status');

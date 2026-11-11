@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ConfigError, MasterCvSchema, imapCredentialsFromEnv, loadJsonFile, resolvePaths } from '../config.ts';
+import { certificateFiles } from '../cv/certificates.ts';
 import { JobStore } from '../db/store.ts';
 import { TailorConfigSchema } from '../tailor/schema.ts';
 import { createLogger } from '../util/logger.ts';
@@ -97,7 +98,11 @@ async function main() {
       try {
         const jobIds = values.job ? values.job.split(',').map(parseId) : undefined;
         const stats = await runSubmitter(
-          { store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, onAssist: printAssist, codes: imap ? createImapCodeSource(imap, logger) : null },
+          {
+            store, cv, answers: settings, contact: tailor.contact, cfg: settings, mapper, browser, logger, onAssist: printAssist,
+            codes: imap ? createImapCodeSource(imap, logger) : null,
+            certificates: certificateFiles(paths.certificatesDir),
+          },
           mode,
           { jobIds },
         );

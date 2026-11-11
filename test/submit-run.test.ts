@@ -225,6 +225,16 @@ describe('Submitter against local forms', { skip: !BROWSER && 'no Chromium avail
     assert.equal(sub.screenshots.length, 2, 'filled + confirmed');
   });
 
+  it('auto: a job named by id that it will not take is reported, not dropped in silence', async () => {
+    const id = approvedJob('lever.html');
+    store.setStatus(id, 'needs_manual', 'LinkedIn forbids automated applications', 'submitter', '2026-10-15T09:00:00.000Z');
+    const warned: string[] = [];
+    const stats = await runSubmitter(deps({ logger: { ...silentLogger, warn: (m) => warned.push(m) } }), 'auto', { jobIds: [id] });
+    assert.equal(stats.attempted, 0);
+    assert.deepEqual(warned, [`#${id}: skipped: "needs_manual", and auto mode only takes approved`]);
+    assert.equal(posted.length, 0);
+  });
+
   it('auto: never submits twice, and respects the per-company limit', async () => {
     const first = approvedJob('lever.html');
     await runSubmitter(deps({ mapper: null }), 'auto');
@@ -244,6 +254,37 @@ describe('Submitter against local forms', { skip: !BROWSER && 'no Chromium avail
     await runSubmitter(deps({ mapper: null }), 'auto');
     assert.match(store.get(captcha)!.statusReason!, /CAPTCHA \(reCAPTCHA\)/);
     assert.match(store.get(login)!.statusReason!, /sign in or create an account/);
+  });
+
+  it("auto: leaves Submit to you when the form has an invisible reCAPTCHA, but not for the host page's own", async () => {
+    const guarded = approvedJob('invisible-captcha.html');
+    await runSubmitter(deps({ mapper: null }), 'auto');
+    assert.equal(posted.length, 0, 'never clicked');
+    assert.equal(store.get(guarded)!.status, 'needs_manual');
+    assert.match(store.get(guarded)!.statusReason!, /invisible reCAPTCHA .* needs your click\. Finish with: run --mode assist/);
+
+    const embedded = approvedJob('host-badge.html', { title: 'Backend Developer' });
+    await runSubmitter(deps({ mapper: null }), 'auto');
+    assert.equal(store.get(embedded)!.status, 'submitted');
+    assert.equal(posted.length, 1);
+  });
+
+  it('attaches your certificates to a form that asks for them, and not to one that does not', async () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), 'certs-'));
+    const certificates = (['aws.pdf', 'scrum.png'] as const).map((name, i) => {
+      const file = path.join(certDir, `cert-${i}${path.extname(name)}`);
+      writeFileSync(file, name.endsWith('.pdf') ? '%PDF-1.4 cert' : 'png');
+      return { id: `cert-${i}`, title: name, issuer: '', year: '', type: name.endsWith('.pdf') ? ('pdf' as const) : ('png' as const), originalName: name, size: 1, uploadedAt: '', file };
+    });
+    const asks = approvedJob('certificates.html');
+    const plain = approvedJob('lever.html', { title: 'Backend Developer' });
+    await runSubmitter(deps({ mapper: null, certificates }), 'auto');
+    assert.equal(store.get(asks)!.status, 'submitted');
+    assert.deepEqual(posted[0]!.certifications, ['cert-0.pdf', 'cert-1.png']);
+    assert.deepEqual(posted[0]!.resume, ['Dana-CV.pdf']);
+    assert.equal(field(asks, 'Certifications').value, 'cert-0.pdf, cert-1.png');
+    assert.equal(store.get(plain)!.status, 'submitted');
+    assert.ok(!JSON.stringify(posted[1]).includes('cert-'), 'no certificate field, no certificates');
   });
 
   it('hands LinkedIn and Workday jobs to you without opening them', async () => {

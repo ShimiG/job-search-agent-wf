@@ -35,6 +35,7 @@ export function cvCorpus(cv: MasterCv): string {
   for (const p of cv.projects) parts.push(p.name, ...p.stack, ...p.highlights.map((h) => h.text));
   for (const ed of cv.education) parts.push(ed.institution, ed.degree, ed.year ?? '');
   for (const l of cv.languages) parts.push(l.language, l.level);
+  for (const c of cv.certifications ?? []) parts.push(c.name, c.issuer ?? '', c.year ?? '');
   return parts.join('\n');
 }
 
@@ -143,12 +144,25 @@ export function normalizeDraft(draft: Draft, cv: MasterCv, cfg: TailorConfig, le
   if (skills.length === 0) skills.push(...allSkills);
   if (skills.length > cfg.cv.maxSkills) skills.length = cfg.cv.maxSkills;
 
+  // Only certificates you uploaded, each once: an unknown id is a certificate you don't hold.
+  const known = new Set((cv.certifications ?? []).map((c) => c.id));
+  const certifications: string[] = [];
+  for (const id of draft.certifications ?? []) {
+    if (!known.has(id)) {
+      issues.push({ severity: 'fixed', where: 'certifications', message: `dropped unknown certificate "${id}"` });
+      continue;
+    }
+    if (!certifications.includes(id)) certifications.push(id);
+  }
+  if (certifications.length > cfg.cv.maxCertifications) certifications.length = cfg.cv.maxCertifications;
+
   const body: ContentBody = {
     headline: draft.headline.trim() || cv.headline,
     summary: draft.summary.text.trim() || cv.summary,
     skills,
     experience,
     projects,
+    certifications,
     coverLetter: {
       greeting: draft.coverLetter.greeting.trim(),
       paragraphs: draft.coverLetter.paragraphs.map((p) => p.text.trim()).filter(Boolean),

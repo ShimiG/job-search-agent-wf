@@ -40,6 +40,9 @@ Truthfulness is the hard constraint. Everything you write about the candidate mu
 - Experience: include EVERY experience entry from the CV, by id, with its most relevant highlights
   first. Projects: include only the most relevant ones.
 - Skills: copy skill strings exactly as written in the CV, most relevant first.
+- Certifications: if the CV lists certifications, give the ids of those relevant to this job, most
+  relevant first, and none that aren't. A relevant one may also back a point in the cover letter.
+  Never mention a certification the CV doesn't list.
 - Headline: a short title the candidate can honestly claim, based on their real roles.
 - Summary: 2-3 sentences, built only from the CV. List the highlight ids it relies on as sources.
 - If the posting asks for something the CV doesn't show, don't imply it. List it in

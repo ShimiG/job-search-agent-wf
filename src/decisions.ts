@@ -89,6 +89,18 @@ export function applyReview(
   return { approved, skipped, ...(mode ? { mode } : {}) };
 }
 
+/**
+ * "Remove" on the review page (or "npm run scout -- remove"): the job leaves every list, whatever
+ * stage it's at, and nothing applies to it. A sent application stays: that's your record, archive it.
+ */
+export function removeJob(store: JobStore, id: number, now = new Date().toISOString()): { id: number; from: JobStatus } {
+  const job = store.get(id);
+  if (!job) throw new Error(`#${id}: not found`);
+  if (job.status === 'submitted') throw new Error(`#${id} was sent: use "Send to archive" in Applied instead`);
+  if (job.status !== 'dismissed') store.setStatus(id, 'dismissed', 'removed by you', 'user', now);
+  return { id, from: job.status };
+}
+
 export function unresolvedCount(store: JobStore, jobId: number): number {
   const report = store.latestApplication(jobId)?.verification as VerificationReport | undefined;
   return report?.issues.filter((i) => i.severity === 'unresolved').length ?? 0;
