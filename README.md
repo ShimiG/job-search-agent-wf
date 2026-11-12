@@ -538,14 +538,14 @@ application, at most 90 days):
    **JobMaster**, **AllJobs** or **ZipRecruiter** when the board's own confirmation says so, which gives
    each its own row under "By how you applied" in Stats), and counts in the stats like any other. Only a
    reply naming a company or a role can be recorded; the rest stay listed as unmatched in the report.
-4. **Report.** The **Applications** tab on the review page and `data/applications-report.md`: applied,
+4. **Report.** The **Stats** tab on the review page and `data/applications-report.md`: applied,
    waiting, assessment, interview, offer and rejected counts; how many applications were sent with this
    tool and how many by you (the other figures cover both); response rate; how many reached an
    interview; average days to a reply; applications with no reply after 14 days; and each application's
    furthest stage ("Rejected after interview"), replies and to-dos.
 
 Every email it reads is recorded in `responses`, so none is read twice. If Ollama is down, the run stops
-and that email is read on the next run. **Check email now** on the Applications tab runs it right away.
+and that email is read on the next run. **Check email now** on the Applied tab runs it right away.
 
 ### Tailor
 
@@ -674,6 +674,7 @@ npm run scout -- run [--no-score] [--batch] [--open-review]
 npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [--md]
 npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
+npm run scout -- results
 npm run scout -- cv-projects <file.json> [--replace-all]
 npm run scout -- cv-check
 npm run scout -- watch [--cron "0 8 * * *"]
