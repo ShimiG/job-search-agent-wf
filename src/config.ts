@@ -251,6 +251,8 @@ export interface Paths {
   certificatesDir: string;
   /** Each agent's log lines, one JSON file per day. */
   logsDir: string;
+  /** The latest result of each eval suite you ran. */
+  evalsDir: string;
   db: string;
 }
 
@@ -269,6 +271,7 @@ export function resolvePaths(root = process.cwd()): Paths {
     browserProfile: path.join(dataDir, 'browser-profile'),
     certificatesDir: path.join(dataDir, 'certificates'),
     logsDir: path.join(dataDir, 'logs'),
+    evalsDir: path.join(dataDir, 'evals'),
     db: process.env.SCOUT_DB_PATH ? path.resolve(root, process.env.SCOUT_DB_PATH) : path.join(dataDir, 'scout.db'),
   };
 }

@@ -84,7 +84,7 @@ export function tokenCost(model: string, t: TokenCounts): number {
 export const usageCost = (model: string, u: ApiUsage) => tokenCost(model, tokenCounts(u));
 
 /** What a call was for. Shown on the review page, so keep them short. */
-export type UsagePurpose = 'score' | 'lookup' | 'draft' | 'fact-check' | 'revise' | 'form' | 'posting' | 'cv' | 'reply' | 'eval';
+export type UsagePurpose = 'score' | 'lookup' | 'draft' | 'fact-check' | 'revise' | 'form' | 'posting' | 'cv' | 'reply';
 
 export const PURPOSE_LABELS: Record<UsagePurpose, string> = {
   score: 'scoring jobs',
@@ -96,7 +96,6 @@ export const PURPOSE_LABELS: Record<UsagePurpose, string> = {
   posting: 'reading pasted links',
   cv: 'converting your CV',
   reply: 'reading replies to your applications',
-  eval: 'running evals',
 };
 
 export type UsageAgent = 'scout' | 'tailor' | 'submitter' | 'review' | 'archiver' | 'eval';

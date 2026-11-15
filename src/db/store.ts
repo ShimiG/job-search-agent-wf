@@ -234,6 +234,21 @@ export type ArchiveChoice = 'archived' | 'applied';
 /** Statuses of an application on its way to being sent. */
 export const UNSENT_STATUSES: readonly JobStatus[] = ['selected', 'tailored', 'tailor_error', 'approved', 'needs_manual', 'failed'];
 
+/** A job as reports count it: where it came from, where it stands, how it scored. */
+export interface JobSummary {
+  id: number;
+  source: JobRow['source'];
+  externalId: string;
+  status: JobStatus;
+  statusReason: string | null;
+  score: number | null;
+  scoredBy: string | null;
+  /** Known only from an alert's title and snippet. */
+  partial: boolean;
+  firstSeenAt: string;
+  duplicateOf: number | null;
+}
+
 export interface SubmissionRecord {
   id: number;
   jobId: number;
@@ -733,6 +748,45 @@ export class JobStore {
 
   submissions(jobId: number): SubmissionRecord[] {
     const rows = this.db.prepare('SELECT * FROM submissions WHERE job_id = ? ORDER BY id').all(jobId) as Array<Record<string, unknown>>;
+    return this.toSubmissions(rows);
+  }
+
+  // ---- everything at once, for reports that count across the whole database
+
+  /** Every job, without its description. */
+  jobSummaries(): JobSummary[] {
+    return this.db
+      .prepare(
+        `SELECT id, source, external_id AS externalId, status, status_reason AS statusReason, score, scored_by AS scoredBy,
+           description_is_partial AS partial, first_seen_at AS firstSeenAt, duplicate_of AS duplicateOf FROM jobs ORDER BY id`,
+      )
+      .all()
+      .map((r) => ({ ...(r as JobSummary), partial: Boolean((r as { partial: number }).partial) }));
+  }
+
+  /** Every status change of every job, oldest first. */
+  allHistory(): Array<{ jobId: number; from: string | null; to: string; reason: string | null; actor: string; at: string }> {
+    return this.db.prepare('SELECT job_id AS jobId, from_status AS "from", to_status AS "to", reason, actor, at FROM status_history ORDER BY id').all() as never;
+  }
+
+  /** Every version of every tailored application, oldest first. */
+  allApplications(): ApplicationRecord[] {
+    return (this.db.prepare('SELECT * FROM applications ORDER BY id').all() as DbApplicationRow[]).map(toApplication);
+  }
+
+  allSubmissions(): SubmissionRecord[] {
+    return this.toSubmissions(this.db.prepare('SELECT * FROM submissions ORDER BY id').all() as Array<Record<string, unknown>>);
+  }
+
+  /** Every run of every agent, with the stats it finished with (null for one that didn't finish). */
+  runs(): Array<{ id: number; agent: string; startedAt: string; finishedAt: string | null; stats: Record<string, unknown> | null }> {
+    const rows = this.db.prepare('SELECT id, agent, started_at, finished_at, stats_json FROM runs ORDER BY id').all() as Array<{
+      id: number; agent: string; started_at: string; finished_at: string | null; stats_json: string | null;
+    }>;
+    return rows.map((r) => ({ id: r.id, agent: r.agent, startedAt: r.started_at, finishedAt: r.finished_at, stats: r.stats_json ? JSON.parse(r.stats_json) : null }));
+  }
+
+  private toSubmissions(rows: Array<Record<string, unknown>>): SubmissionRecord[] {
     return rows.map((r) => ({
       id: r.id as number,
       jobId: r.job_id as number,
