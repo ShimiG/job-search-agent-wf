@@ -1,4 +1,4 @@
-import type { CostMeter, UsagePurpose } from '../llm/cost.ts';
+import { timed, type CostMeter, type UsagePurpose } from '../llm/cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -159,16 +159,18 @@ export class AnthropicTailor implements TailorWriter, ClaimVerifier {
   }
 
   private async call<T extends z.ZodType>(purpose: UsagePurpose, system: string, cv: MasterCv, user: string, schema: T, maxTokens: number): Promise<z.infer<T>> {
-    const message = await this.client.messages.parse({
-      model: this.model,
-      max_tokens: maxTokens,
-      system: [
-        { type: 'text', text: system },
-        { type: 'text', text: profile(cv), cache_control: { type: 'ephemeral' } },
-      ],
-      messages: [{ role: 'user', content: user }],
-      output_config: { format: zodOutputFormat(schema) },
-    });
+    const message = await timed(this.meter, purpose, this.model, () =>
+      this.client.messages.parse({
+        model: this.model,
+        max_tokens: maxTokens,
+        system: [
+          { type: 'text', text: system },
+          { type: 'text', text: profile(cv), cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{ role: 'user', content: user }],
+        output_config: { format: zodOutputFormat(schema) },
+      }),
+    );
     // The job comes from withJob() around the tailoring of each job.
     this.meter?.record(purpose, this.model, message.usage);
     if (message.stop_reason === 'refusal') throw new Error('Model declined the request');

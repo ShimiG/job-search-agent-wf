@@ -194,6 +194,12 @@ const MIGRATIONS: Array<string | ((db: Database.Database) => void)> = [
   CREATE INDEX idx_usage_job ON usage(job_id);
     `);
   },
+  // 11: How long each model call took, and why a failed one failed (those rows have no tokens or cost).
+  (db) => {
+    const columns = (db.pragma('table_info(usage)') as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.includes('duration_ms')) db.exec('ALTER TABLE usage ADD COLUMN duration_ms INTEGER');
+    if (!columns.includes('error')) db.exec('ALTER TABLE usage ADD COLUMN error TEXT');
+  },
 ];
 
 export interface ResponseRecord {
@@ -791,15 +797,15 @@ export class JobStore {
     this.db
       .prepare(
         `INSERT INTO usage (at, agent, purpose, model, job_id, run_id, input_tokens, output_tokens, cache_read_tokens,
-           cache_write_tokens, web_searches, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           cache_write_tokens, web_searches, cost, duration_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(u.at, u.agent, u.purpose, u.model, u.jobId, u.runId, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.webSearches, u.cost);
+      .run(u.at, u.agent, u.purpose, u.model, u.jobId, u.runId, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.webSearches, u.cost, u.durationMs, u.error);
   }
 
-  /** Spending since `sinceIso` (all time when omitted), by what the calls were for. */
+  /** Spending since `sinceIso` (all time when omitted), by what the calls were for. Calls that cost something: not failed ones or a local model's. */
   usageByPurpose(sinceIso?: string): Array<{ purpose: string; calls: number; cost: number }> {
     return this.db
-      .prepare('SELECT purpose, COUNT(*) AS calls, SUM(cost) AS cost FROM usage WHERE at >= ? GROUP BY purpose ORDER BY cost DESC')
+      .prepare(`SELECT purpose, COUNT(*) AS calls, SUM(cost) AS cost FROM usage WHERE at >= ? AND error IS NULL AND model NOT LIKE 'ollama:%' GROUP BY purpose ORDER BY cost DESC`)
       .all(sinceIso ?? '') as Array<{ purpose: string; calls: number; cost: number }>;
   }
 
@@ -810,7 +816,20 @@ export class JobStore {
 
   /** When spending was first recorded, or undefined if never. */
   usageSince(): string | undefined {
-    return (this.db.prepare('SELECT MIN(at) AS at FROM usage').get() as { at: string | null }).at ?? undefined;
+    return (this.db.prepare(`SELECT MIN(at) AS at FROM usage WHERE error IS NULL AND model NOT LIKE 'ollama:%'`).get() as { at: string | null }).at ?? undefined;
+  }
+
+  /** Every recorded model call, oldest first: Claude's, a local model's, and failed ones. */
+  usageRows(sinceIso?: string): UsageEntry[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT at, agent, purpose, model, job_id AS jobId, run_id AS runId, input_tokens AS inputTokens, output_tokens AS outputTokens,
+             cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens, web_searches AS webSearches, cost,
+             duration_ms AS durationMs, error FROM usage WHERE at >= ? ORDER BY id`,
+        )
+        .all(sinceIso ?? '') as UsageEntry[]
+    );
   }
 
   startRun(agent: string, now: string): number {

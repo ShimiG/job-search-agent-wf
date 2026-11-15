@@ -12,8 +12,9 @@ const columns = (db: Database.Database, table: string) => (db.pragma(`table_info
 const tables = (db: Database.Database) => (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>).map((t) => t.name);
 
 function check(db: Database.Database) {
-  assert.equal(db.pragma('user_version', { simple: true }), 10);
+  assert.equal(db.pragma('user_version', { simple: true }), 11);
   for (const t of ['responses', 'kv', 'usage']) assert.ok(tables(db).includes(t), `${t} table`);
+  for (const c of ['duration_ms', 'error']) assert.ok(columns(db, 'usage').includes(c), `usage.${c}`);
   assert.ok(columns(db, 'responses').includes('message_id'), "the Archiver's responses table");
   for (const c of ['scored_by', 'outcome', 'outcome_at', 'archived_from', 'archive_choice']) assert.ok(columns(db, 'jobs').includes(c), `jobs.${c}`);
 }
@@ -45,7 +46,7 @@ describe('database versions', () => {
     const first = new JobStore(f);
     const { id } = first.upsert(makeJob(), NOW.toISOString());
     first.saveScore(id, { score: 80, verdict: 'good', seniorityFit: 'fit', matchReasons: [], gaps: [], dealbreakers: [], summary: '' }, 'shortlisted', NOW.toISOString());
-    first.saveUsage({ at: NOW.toISOString(), agent: 'scout', purpose: 'score', model: 'claude-sonnet-5-5', jobId: id, runId: null, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, cost: 0.5 });
+    first.saveUsage({ at: NOW.toISOString(), agent: 'scout', purpose: 'score', model: 'claude-sonnet-5-5', jobId: id, runId: null, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, cost: 0.5, durationMs: 900, error: null });
     // What that build had: its own responses table, usage, and none of the Archiver's columns or tables.
     first.db.exec(`
       DROP TABLE responses; DROP TABLE kv;

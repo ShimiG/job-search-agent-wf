@@ -384,7 +384,7 @@ async function main() {
   const root = process.cwd();
   loadEnv(root);
   const paths = resolvePaths(root);
-  const logger = createLogger();
+  const logger = createLogger(undefined, { dir: paths.logsDir, agent: 'scout' });
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -499,7 +499,7 @@ async function main() {
         logger.info(`The Archiver is already running (started ${busy.startedAt}); skipping this run.`);
         return;
       }
-      await archive(paths, logger);
+      await archive(paths, createLogger(undefined, { dir: paths.logsDir, agent: 'archiver' }));
       return;
     }
     case 'compare-scorers':

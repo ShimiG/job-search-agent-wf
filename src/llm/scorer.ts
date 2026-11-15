@@ -1,4 +1,4 @@
-import { BATCH_DISCOUNT, type ApiUsage, type CostMeter } from './cost.ts';
+import { BATCH_DISCOUNT, timed, type ApiUsage, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -220,13 +220,13 @@ export class AnthropicScorer implements Scorer {
 
   async score(job: NormalizedJob): Promise<ScoreResult> {
     const request = this.request(job);
-    const message = this.advisor
-      ? await this.client.beta.messages.parse({ ...request, ...this.advisorParams(this.advisor), betas: [ADVISOR_BETA] })
-      : await this.client.messages.parse(request);
-    if (this.meter) {
-      const jobId = (job as { id?: unknown }).id;
-      this.recordCost(message.usage, typeof jobId === 'number' ? jobId : null);
-    }
+    const id = (job as { id?: unknown }).id;
+    const jobId = typeof id === 'number' ? id : null;
+    const advisor = this.advisor;
+    const message = advisor
+      ? await timed(this.meter, 'score', this.executor, () => this.client.beta.messages.parse({ ...request, ...this.advisorParams(advisor), betas: [ADVISOR_BETA] }), jobId)
+      : await timed(this.meter, 'score', this.executor, () => this.client.messages.parse(request), jobId);
+    this.recordCost(message.usage, jobId);
     if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
     if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');
     if (!message.parsed_output) throw new Error('Model returned no structured output');
@@ -319,21 +319,29 @@ export interface OllamaScorerOptions {
   /** The Ollama model, e.g. "gemma3:12b". */
   model: string;
   examples?: ScoredExample[];
+  /** Records each call's tokens and time (a local model costs nothing). */
+  meter?: CostMeter;
 }
 
 /** Scores with a local model through Ollama: free and nothing leaves the Mac, but slower and less sharp than Claude. */
 export class OllamaScorer implements Scorer {
   readonly model: string;
   private readonly system: string;
+  private readonly meter?: CostMeter;
 
   constructor(opts: OllamaScorerOptions) {
     this.model = `ollama:${opts.model}`;
+    this.meter = opts.meter;
     // Kept identical across jobs, so Ollama reuses what it already read of it.
     this.system = [INSTRUCTIONS, buildCandidateProfile(opts.cv, opts.prefs), buildExamples(opts.examples ?? [])].filter(Boolean).join('\n\n');
   }
 
   async score(job: NormalizedJob): Promise<ScoreResult> {
-    const raw = await ollamaJson({ model: this.model.slice('ollama:'.length), system: this.system, user: buildJobPrompt(job), schema: ScoreSchema });
+    const id = (job as { id?: unknown }).id;
+    const raw = await ollamaJson({
+      model: this.model.slice('ollama:'.length), system: this.system, user: buildJobPrompt(job), schema: ScoreSchema,
+      meter: this.meter, purpose: 'score', jobId: typeof id === 'number' ? id : null,
+    });
     return postProcess(raw);
   }
 }
@@ -344,8 +352,7 @@ export class OllamaScorer implements Scorer {
  */
 export function createScorer(opts: { cv: MasterCv; prefs: Preferences; model?: string; examples?: () => ScoredExample[]; meter?: CostMeter }): Scorer {
   const local = ollamaModel(opts.model);
-  if (local) return new OllamaScorer({ cv: opts.cv, prefs: opts.prefs, model: local, examples: pickExamples(opts.examples?.() ?? [], 8) });
-  // A local model costs nothing, so only Claude's calls reach the meter.
+  if (local) return new OllamaScorer({ cv: opts.cv, prefs: opts.prefs, model: local, examples: pickExamples(opts.examples?.() ?? [], 8), meter: opts.meter });
   return new AnthropicScorer({ cv: opts.cv, prefs: opts.prefs, model: opts.model, advisor: advisorModel(opts.model), meter: opts.meter });
 }
 

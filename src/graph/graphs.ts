@@ -81,7 +81,7 @@ function buildAdapters(paths: Paths, logger: Logger): SourceAdapter[] {
 
 export async function scoutAgent(noScore = false): Promise<RunStats> {
   const paths = resolvePaths();
-  const logger = createLogger();
+  const logger = createLogger(undefined, { dir: paths.logsDir, agent: 'scout' });
   const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
   const model = process.env.SCOUT_MODEL;
   const meter = new CostMeter('scout');
@@ -114,7 +114,7 @@ export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): 
   const pdf = cfg.pdf.enabled && !noPdf ? await launchPdfEngine(cfg.pdf.browserPath) : null;
   try {
     return await withStore((store) =>
-      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(), model: llm.model, meter }, { jobIds }),
+      runTailor({ store, cv, cfg, writer: llm, verifier: llm, pdf, outDir: paths.applicationsDir, logger: createLogger(undefined, { dir: paths.logsDir, agent: 'tailor' }), model: llm.model, meter }, { jobIds }),
     );
   } finally {
     await pdf?.close();
@@ -124,7 +124,7 @@ export async function tailorAgent(jobIds: number[] | undefined, noPdf = false): 
 export async function submitAgent(jobIds: number[] | undefined, mode: SubmitMode = 'assist'): Promise<SubmitRunStats> {
   if (!['assist', 'prepare', 'auto'].includes(mode)) throw new ConfigError('mode must be assist, prepare or auto');
   const paths = resolvePaths();
-  const logger = createLogger();
+  const logger = createLogger(undefined, { dir: paths.logsDir, agent: 'submitter' });
   if (!existsSync(paths.submit)) throw new ConfigError(`Missing ${paths.submit}. Run "npm run scout -- init" to create it.`);
   const settings = loadJsonFile(paths.submit, SubmitFileSchema);
   if (mode === 'auto' && !settings.autoSubmit) {
@@ -242,7 +242,7 @@ export const archiver = new StateGraph(
     archiverStats: Annotation<ArchiverStats | undefined>,
   }),
 )
-  .addNode('archive', async () => ({ archiverStats: await archive(resolvePaths(), createLogger()) }))
+  .addNode('archive', async () => ({ archiverStats: await archive(resolvePaths(), createLogger(undefined, { dir: resolvePaths().logsDir, agent: 'archiver' })) }))
   .addEdge(START, 'archive')
   .addEdge('archive', END)
   .compile({ name: 'archiver' });
