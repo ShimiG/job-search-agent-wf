@@ -1,0 +1,160 @@
+{
+  "name": "Dana Levi",
+  "headline": "Automation & AI Agent Developer",
+  "location": "Ramat Gan, Israel",
+  "summary": "Automation and AI agent developer with 5 years at Acme Health, owning WhatsApp automation for a large healthcare network and building LLM-powered support agents. Builds full-stack side projects in TypeScript and Node.js.",
+  "skills": [
+    {
+      "category": "Languages",
+      "items": [
+        "JavaScript",
+        "TypeScript",
+        "SQL"
+      ]
+    },
+    {
+      "category": "Integrations",
+      "items": [
+        "REST APIs",
+        "SOAP",
+        "JSON",
+        "XML",
+        "Webhooks"
+      ]
+    },
+    {
+      "category": "AI",
+      "items": [
+        "LLM-powered support agents",
+        "Knowledge-base grounding",
+        "Prompt engineering",
+        "Claude API"
+      ]
+    },
+    {
+      "category": "Web",
+      "items": [
+        "Node.js",
+        "React",
+        "Vite",
+        "SQLite"
+      ]
+    },
+    {
+      "category": "Platforms",
+      "items": [
+        "WhatsApp Business messaging"
+      ]
+    }
+  ],
+  "experience": [
+    {
+      "id": "acme",
+      "company": "Acme Health",
+      "role": "Automation and AI Agent Developer",
+      "start": "2020-09",
+      "highlights": [
+        {
+          "id": "acme-northwind-owner",
+          "text": "Sole developer of WhatsApp automation for Northwind Clinics, the company's largest account, for 4 years"
+        },
+        {
+          "id": "acme-booking",
+          "text": "Built appointment-booking flows with date and time slot pagination on top of SOAP and REST integrations"
+        },
+        {
+          "id": "acme-screening",
+          "text": "Built Hebrew-language health screening flows: family medical history intake and risk-assessment scoring logic"
+        },
+        {
+          "id": "acme-llm-agents",
+          "text": "Developed LLM-powered support agents grounded in a knowledge base, and diagnosed retrieval failures in production"
+        },
+        {
+          "id": "acme-audit",
+          "text": "Audited bot scripts with over 2,000 nodes to find duplicate intents and routing bugs"
+        },
+        {
+          "id": "acme-es5",
+          "text": "Wrote ES5-compatible JavaScript within strict platform constraints"
+        }
+      ]
+    },
+    {
+      "id": "brightline",
+      "company": "Brightline Telecom",
+      "role": "Technical Support Specialist",
+      "start": "2018-03",
+      "end": "2020-08",
+      "highlights": [
+        {
+          "id": "brightline-tickets",
+          "text": "Resolved customer connectivity issues by phone and chat, and wrote troubleshooting guides for new hires"
+        },
+        {
+          "id": "brightline-scripts",
+          "text": "Wrote small JavaScript tools that pulled customer data from the billing system's REST API for the support team"
+        }
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "ticket-router",
+      "name": "Ticket Router",
+      "stack": [
+        "TypeScript",
+        "Node.js",
+        "SQLite",
+        "Claude API"
+      ],
+      "highlights": [
+        {
+          "id": "ticket-router-pipeline",
+          "text": "Built a support-ticket triage service that classifies incoming tickets with the Claude API using structured outputs and routes them by rules"
+        },
+        {
+          "id": "ticket-router-tests",
+          "text": "Covered the routing rules with 60 automated tests run on every commit"
+        }
+      ]
+    },
+    {
+      "id": "photo-sorter",
+      "name": "Photo Sorter",
+      "stack": [
+        "React",
+        "Vite",
+        "Node.js",
+        "SQLite"
+      ],
+      "highlights": [
+        {
+          "id": "photo-sorter-what",
+          "text": "Built a web app that groups photos by date and location and finds near-duplicates by perceptual hash"
+        }
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "The Open University of Israel",
+      "degree": "B.Sc. Computer Science (in progress)"
+    }
+  ],
+  "languages": [
+    {
+      "language": "Hebrew",
+      "level": "Native"
+    },
+    {
+      "language": "English",
+      "level": "Professional"
+    },
+    {
+      "language": "Russian",
+      "level": "Fluent"
+    }
+  ],
+  "links": {}
+}

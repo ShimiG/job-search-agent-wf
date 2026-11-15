@@ -218,7 +218,9 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
     '',
     '- Everything is counted from the local database. Nothing is estimated except dollars, which come from token counts at list prices; the Anthropic console has the exact bill.',
     '- A job counts for a stage if it ever reached it, so a job later archived still counts as shortlisted.',
-    `- Costs are only known from ${day(c.period.costsFrom)}; per-application and per-callback costs count applications sent since then, and include the scoring of jobs never applied to.`,
+    c.period.costsFrom
+      ? `- Costs are only known from ${day(c.period.costsFrom)}; per-application and per-callback costs count applications sent since then, and include the scoring of jobs never applied to.`
+      : '- No model cost has been recorded yet, so the cost figures are empty.',
     '- Call times include retries. Batch results and advisor steps carry no time of their own.',
     '- Tailoring counts cover every version the model wrote; layout and wording counts cover the latest version of each job. A version made before a check existed is not counted for that check.',
     '',

@@ -70,8 +70,11 @@ export function extractTerms(text: string): string[] {
   return [...terms];
 }
 
+/** "LLMs" and "APIs" are "LLM" and "API": the plural of an acronym your CV uses isn't a new claim. */
+const singular = (term: string) => (/^[A-Z][A-Z0-9]+s$/.test(term) ? term.slice(0, -1) : term);
+
 export const unknownTerms = (text: string, ...corpora: string[]) =>
-  extractTerms(text).filter((t) => !corpora.some((c) => containsKeyword(c, t)));
+  extractTerms(text).filter((t) => !corpora.some((c) => containsKeyword(c, t) || containsKeyword(c, singular(t))));
 
 export const unknownNumbers = (text: string, ...allowed: string[]) => {
   const known = new Set(allowed.flatMap(extractNumbers));
