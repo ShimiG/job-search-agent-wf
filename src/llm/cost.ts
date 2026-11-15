@@ -71,8 +71,12 @@ function ratesFor(model: string, promptTokens: number): Rates {
   return PRICES[id]!;
 }
 
+/** A model that runs on your own machine through Ollama: its tokens are counted, and cost nothing. */
+export const isLocalModel = (model: string) => model.startsWith('ollama:');
+
 /** Dollars for one call's tokens. */
 export function tokenCost(model: string, t: TokenCounts): number {
+  if (isLocalModel(model)) return 0;
   const r = ratesFor(model, t.inputTokens + t.cacheReadTokens + t.cacheWriteTokens);
   return (t.inputTokens * r.input + t.outputTokens * r.output + t.cacheWriteTokens * r.cacheWrite + t.cacheReadTokens * r.cacheRead) / 1e6 + t.webSearches * WEB_SEARCH_DOLLARS;
 }
@@ -80,7 +84,7 @@ export function tokenCost(model: string, t: TokenCounts): number {
 export const usageCost = (model: string, u: ApiUsage) => tokenCost(model, tokenCounts(u));
 
 /** What a call was for. Shown on the review page, so keep them short. */
-export type UsagePurpose = 'score' | 'lookup' | 'draft' | 'fact-check' | 'revise' | 'form' | 'posting' | 'cv';
+export type UsagePurpose = 'score' | 'lookup' | 'draft' | 'fact-check' | 'revise' | 'form' | 'posting' | 'cv' | 'reply';
 
 export const PURPOSE_LABELS: Record<UsagePurpose, string> = {
   score: 'scoring jobs',
@@ -91,9 +95,10 @@ export const PURPOSE_LABELS: Record<UsagePurpose, string> = {
   form: 'answering form questions',
   posting: 'reading pasted links',
   cv: 'converting your CV',
+  reply: 'reading replies to your applications',
 };
 
-export type UsageAgent = 'scout' | 'tailor' | 'submitter' | 'review';
+export type UsageAgent = 'scout' | 'tailor' | 'submitter' | 'review' | 'archiver' | 'eval';
 
 export interface UsageEntry extends TokenCounts {
   at: string;
@@ -103,6 +108,30 @@ export interface UsageEntry extends TokenCounts {
   jobId: number | null;
   runId: number | null;
   cost: number;
+  /** How long the call took, retries included; null when it wasn't timed (a batch result, an advisor step). */
+  durationMs: number | null;
+  /** Why the call failed; null for one that answered. A failed call has no tokens and costs nothing. */
+  error: string | null;
+}
+
+/** How long each answered call took, keyed by its usage block, for record() to pick up. */
+const durations = new WeakMap<object, number>();
+
+/**
+ * Runs one model call and times it. The time is stored with the call when its usage is record()ed;
+ * a call that throws is recorded as a failure, so error rates can be counted, and thrown again.
+ */
+export async function timed<T>(meter: CostMeter | undefined, purpose: UsagePurpose, model: string, call: () => Promise<T>, jobId?: number | null): Promise<T> {
+  const started = performance.now();
+  try {
+    const out = await call();
+    const usage = (out as { usage?: unknown } | null | undefined)?.usage;
+    if (usage && typeof usage === 'object') durations.set(usage, Math.round(performance.now() - started));
+    return out;
+  } catch (err) {
+    meter?.fail(purpose, model, err, Math.round(performance.now() - started), jobId);
+    throw err;
+  }
 }
 
 const currentJob = new AsyncLocalStorage<number>();
@@ -132,7 +161,21 @@ export class CostMeter {
   /** `discount`: the share of list price paid, e.g. BATCH_DISCOUNT for a Message Batches request. */
   record(purpose: UsagePurpose, model: string, usage: ApiUsage, jobId?: number | null, discount = 1): number {
     const counts = tokenCounts(usage);
-    const cost = tokenCost(model, counts) * discount;
+    return this.save(purpose, model, counts, tokenCost(model, counts) * discount, jobId, durations.get(usage) ?? null, null);
+  }
+
+  /** A call to a local model ("ollama:<name>"): free, but its tokens and time are part of the picture. */
+  recordLocal(purpose: UsagePurpose, model: string, call: { inputTokens: number; outputTokens: number; durationMs: number }, jobId?: number | null): void {
+    this.save(purpose, model, { inputTokens: call.inputTokens, outputTokens: call.outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 }, 0, jobId, call.durationMs, null);
+  }
+
+  /** A call that threw (timeout, overload, network): no tokens and no cost, only that it happened and why. */
+  fail(purpose: UsagePurpose, model: string, error: unknown, durationMs: number, jobId?: number | null): void {
+    const message = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 200);
+    this.save(purpose, model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 }, 0, jobId, durationMs, message || 'failed');
+  }
+
+  private save(purpose: UsagePurpose, model: string, counts: TokenCounts, cost: number, jobId: number | null | undefined, durationMs: number | null, error: string | null): number {
     const entry: UsageEntry = {
       ...counts,
       at: this.clock().toISOString(),
@@ -142,6 +185,8 @@ export class CostMeter {
       jobId: jobId ?? currentJob.getStore() ?? null,
       runId: this.runId,
       cost,
+      durationMs,
+      error,
     };
     this.spent += cost;
     this.byPurpose.set(purpose, (this.byPurpose.get(purpose) ?? 0) + cost);

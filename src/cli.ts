@@ -22,6 +22,9 @@ import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
 import { auditCv, formatAudit } from './cv/audit.ts';
 import { FORM_FIELD, LinkError, overriddenBy, setCvLink } from './cv/links.ts';
+import { loadEvalSummaries } from './evals/types.ts';
+import { formatCaseStudy } from './report/format.ts';
+import { caseStudy } from './report/metrics.ts';
 import { mergeProjects, parseProjectsFile } from './cv/projects.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { compareWithClaude, formatComparison } from './llm/compare.ts';
@@ -66,6 +69,9 @@ Commands:
   cv-projects <file.json> [--replace-all]
                                Update the projects in your CV from a file: same ID or name replaces, the rest
                                are added; --replace-all also removes projects the file doesn't list
+  case-study [--out file.md]   Everything in numbers, for a write-up: the funnel, sources, scoring against your decisions, what
+                               the Tailor's checks caught, sending, replies, cost, reliability and eval results. Names no
+                               company, job or person. Also saved as JSON
   cv-link [<name> <url>]       Set a link in your CV (portfolio, website, linkedin, github...): printed in the CV header
                                and typed into the matching form field. <name> --remove takes it out; no arguments lists them
   cv-check                     Check your CV's own wording: weak bullets, bullets with no number, skills nothing backs up
@@ -384,7 +390,7 @@ async function main() {
   const root = process.cwd();
   loadEnv(root);
   const paths = resolvePaths(root);
-  const logger = createLogger();
+  const logger = createLogger(undefined, { dir: paths.logsDir, agent: 'scout' });
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -392,6 +398,7 @@ async function main() {
       batch: { type: 'boolean' },
       'replace-all': { type: 'boolean' },
       remove: { type: 'boolean' },
+      out: { type: 'string' },
       'open-review': { type: 'boolean' },
       status: { type: 'string' },
       all: { type: 'boolean' },
@@ -473,6 +480,22 @@ async function main() {
       }
       return;
     }
+    case 'case-study': {
+      const store = new JobStore(paths.db);
+      try {
+        const study = caseStudy(store);
+        const evals = loadEvalSummaries(paths.evalsDir);
+        const markdown = formatCaseStudy(study, evals);
+        const file = values.out ? path.resolve(String(values.out)) : path.join(paths.dataDir, 'case-study.md');
+        writeFileSync(file, markdown);
+        writeFileSync(file.replace(/\.md$/i, '') + '.json', JSON.stringify({ ...study, evals }, null, 2) + '\n');
+        console.log(values.json ? JSON.stringify({ ...study, evals }, null, 2) : markdown);
+        console.error(`Saved to ${file} (and the same numbers as JSON beside it, for charts).`);
+      } finally {
+        store.close();
+      }
+      return;
+    }
     case 'add-source':
       return commandAddSource(paths, args[0], values);
     case 'cv-projects':
@@ -499,7 +522,7 @@ async function main() {
         logger.info(`The Archiver is already running (started ${busy.startedAt}); skipping this run.`);
         return;
       }
-      await archive(paths, logger);
+      await archive(paths, createLogger(undefined, { dir: paths.logsDir, agent: 'archiver' }));
       return;
     }
     case 'compare-scorers':

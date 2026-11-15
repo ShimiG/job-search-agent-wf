@@ -16,6 +16,7 @@
     "graph": "langgraphjs dev --host 127.0.0.1",
     "graph:tunnel": "langgraphjs dev --tunnel",
     "archive": "tsx src/cli.ts archive",
+    "eval": "tsx src/evals/cli.ts",
     "review": "tsx src/review/server.ts",
     "schedule": "tsx src/schedule.ts"
   },

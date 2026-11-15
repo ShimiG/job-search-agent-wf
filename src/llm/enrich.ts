@@ -1,4 +1,4 @@
-import { FALLBACK_MODEL, tokenCost, type CostMeter } from './cost.ts';
+import { FALLBACK_MODEL, timed, tokenCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { looksClosed } from '../pipeline/closed.ts';
@@ -219,7 +219,7 @@ export class AnthropicEnricher implements Enricher {
 
     // Searches and fetches run server-side; a long turn pauses and is resumed by sending it back.
     for (let turn = 0; turn < 4; turn++) {
-      const message = await this.client.beta.messages.create({
+      const message = await timed(this.meter, 'lookup', this.model, () => this.client.beta.messages.create({
         model: this.model,
         max_tokens: 8000,
         betas: ['server-side-fallback-2026-07-01'],
@@ -234,7 +234,7 @@ export class AnthropicEnricher implements Enricher {
           REPORT_TOOL,
         ],
         messages,
-      });
+      }), typeof jobId === 'number' ? jobId : null);
       this.meter?.record('lookup', this.model, message.usage, typeof jobId === 'number' ? jobId : null);
       usage.inputTokens += message.usage.input_tokens;
       usage.cacheReadTokens += message.usage.cache_read_input_tokens ?? 0;

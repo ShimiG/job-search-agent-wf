@@ -94,6 +94,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `REVIEW_REMOTE=true` | Lets your phone open the review page (see [On your phone](#on-your-phone)). |
 | `REVIEW_AUTO_OPEN=false` | Stops Scout from opening the review page when it finishes. |
 | `REVIEW_PORT`, `LANGGRAPH_URL` | Defaults 4100 and `http://127.0.0.1:2024`. |
+| `LOG_TO_FILE=false`, `LOG_KEEP_DAYS` | Turns off the log files in `data/logs/`, or keeps them longer than 30 days (see [Logs](#logs)). |
 
 ### Projects in your CV
 
@@ -288,12 +289,78 @@ sources that never answer.
 
 **What it costs.** Every Claude call is recorded with its token counts and priced at list rates for the
 model that ran it: scoring (the advisor's part at the advisor's rate), web lookups, tailoring,
-fact-checking, form answers, pasted links and CV uploads. A local model costs nothing and isn't counted,
-nor is the Archiver. Each run's summary ends with its cost; the Stats tab and `npm run scout -- results`
+fact-checking, form answers, pasted links and CV uploads. A local model's calls (the Archiver reading
+replies, local scoring) are recorded with their tokens and time and cost nothing, so they never appear
+in spending. Each call also carries how long it took, and one that failed is recorded with its reason.
+Each run's summary ends with its cost; the Stats tab and `npm run scout -- results`
 show the last 30 days by purpose, the total, and the all-in cost per application sent and per callback
 (scoring jobs you skipped is part of what an application costs). Cards in Ready to send show what that
 job has cost so far. Figures are estimates from token counts; your Anthropic console has the exact
 bill. Prices live in `src/llm/cost.ts`: a model that isn't listed there is priced as Sonnet 5.5.
+
+### The numbers, for a write-up
+
+```bash
+npm run scout -- case-study            # prints it; saved as data/case-study.md and .json
+npm run scout -- case-study --out ~/Desktop/numbers.md
+```
+
+One document with everything counted from your database:
+
+- **Funnel:** found, passed the rules, scored, shortlisted, picked, tailored, approved, sent, each with
+  its share of the stage before; per source; and why jobs were filtered out.
+- **Scoring against your own decisions:** the median score of jobs you picked and of jobs you dismissed,
+  the chance a pick outscored a dismissal (AUC: 50% is a coin flip), how many shortlisted jobs you
+  picked, how many picks came from below the cutoff, how often the advisor was consulted. No model is
+  asked: your picks are the answer key.
+- **Tailoring:** bullets written, kept in your exact words, reworded; rewordings taken back by the rule
+  checks and by the fact-check; letters rewritten; claims left for you; keyword coverage; page fit; PDF
+  text; wording.
+- **Sending and replies:** attempts by mode and by application system, who answered each form field,
+  replies by kind, days to a first answer and to a rejection, callbacks by source, score and method.
+- **Cost:** by purpose, model and week; what prompt caching and batch scoring saved; the cost of a
+  scored job, a tailored CV, a filled form, an application and a callback; what the local model handled.
+- **Reliability:** failed calls, median and 95th-percentile call times, runs that didn't finish.
+- **Evals:** the latest result of each suite you ran (below).
+
+It names no company, job or person: a company's own application site is "Other sites", and filter
+reasons are grouped. Every rate comes with the counts behind it, and one from fewer than 20 cases is
+marked with an asterisk. Read it before you publish all the same: it is your data. Costs, call times
+and failures are only known from when they started being recorded.
+
+### Evals
+
+The numbers above are yours and nobody can rerun them. Evals are the other kind: fixed, fictional
+cases in [`evals/`](evals/README.md), run through the same code the agents use.
+
+```bash
+npm run eval -- scoring                 # good fits shortlisted? poor fits rejected? planted instructions ignored?
+npm run eval -- factcheck               # invented claims in a reworded CV caught? honest ones left alone?
+npm run eval -- factcheck --rules-only  # the rule checks alone: no model, no cost
+npm run eval -- replies                 # the Archiver's local model sorting 24 emails
+npm run eval -- all
+```
+
+`scoring` and `factcheck` call Claude (a few cents; the result says how much) and `replies` needs
+Ollama. `--model` tests a different model, which makes these the way to compare Haiku with Sonnet, or
+a local model with Claude, before switching. Results are saved under `data/evals/` and appear in the
+case study. The rule checks alone, which need no model, catch 5 of the 12 invented claims (the ones
+that add a number or a name) and take back none of the 12 honest rewordings; what the fact-checker
+adds on top is what `npm run eval -- factcheck` measures. The samples are small: read
+[`evals/README.md`](evals/README.md) before quoting a rate.
+
+### Logs
+
+Every agent also writes its log lines, debug ones included, to `data/logs/<date>.jsonl`, one JSON
+object per line: `{"t", "level", "agent", "msg", "meta"}`. To see what went wrong in a run:
+
+```bash
+grep '"level":"error"\|"level":"warn"' data/logs/$(date -u +%F).jsonl
+```
+
+Files older than 30 days are deleted when an agent starts (`LOG_KEEP_DAYS` changes that);
+`LOG_TO_FILE=false` turns the file off. The logs name jobs and companies and stay in `data/`, which is
+git-ignored.
 
 ## The review page
 
@@ -692,6 +759,7 @@ npm run scout -- list [--status s1,s2] [--all] [--limit N] [--json] [--brief] [-
 npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | reevaluate
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
 npm run scout -- results
+npm run scout -- case-study [--out file.md] [--json]
 npm run scout -- cv-projects <file.json> [--replace-all]
 npm run scout -- cv-link [<name> <url> | <name> --remove]
 npm run scout -- cv-check
@@ -700,6 +768,9 @@ npm run scout -- compare-scorers [--limit 40]
 
 # Archiver
 npm run archive
+
+# Evals
+npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--quiet]
 
 # Tailor
 npm run tailor -- run [--job 12,15] [--no-pdf]
@@ -752,6 +823,8 @@ src/
   cv/import.ts           CV upload: PDF/Word to the master CV
   cv/certificates.ts     your certificates: validation, storage, what the Tailor sees
   cv/audit.ts            the CV check: wording, numbers, skills
+  report/                the case study: every number, counted from the database
+  evals/                 the eval suites and their runner (the cases are in evals/ at the top)
   cv/links.ts            the CV's links: portfolio, website, LinkedIn, GitHub
   settings.ts            settings saved from the review page (the shortlist's minimum score)
   tailor/                draft, rules, fact-check, render, bullet style, PDF text check
@@ -759,6 +832,7 @@ src/
   graph/graphs.ts        the LangGraph graphs
   review/                the review page (server, page, launcher)
 examples/                templates copied by init
+evals/                   eval cases: a fictional CV, postings, reworded bullets, emails
 test/                    node:test suites and fixtures
 ```
 
@@ -770,7 +844,8 @@ npm run typecheck
 ```
 
 Tests cover the adapters, email parsing, filters, dedupe, scoring with a fake Claude client, full Scout
-runs on an in-memory database, the Tailor's rules and real PDF rendering, the CV import, and Submitter
+runs on an in-memory database, the Tailor's rules and real PDF rendering, the CV import, the case study
+on a seeded database, the eval suites with stand-in models (and the rule checks for real), and Submitter
 runs in headless Chrome against local pages modeled on Greenhouse (including autocomplete fields and
 emailed security codes), Lever, CAPTCHA, sign-in and iframe pages. Browser tests find Chrome on macOS
 automatically; elsewhere, point `TAILOR_TEST_BROWSER` at a Chromium binary.
@@ -782,6 +857,9 @@ automatically; elsewhere, point `TAILOR_TEST_BROWSER` at a Chromium binary.
 - **The PDF text check reads the file with one parser** (pdf.js). It catches text that isn't in the
   file as characters, or is stored out of order; an employer's ATS may still read a clean file its own
   way, especially right-to-left text.
+- **The eval cases are small and hand-labelled.** 24 to 26 cases a suite, written and labelled by
+  hand: enough to catch a regression or compare two models, not to quote precise rates. A label can be
+  wrong; read a case before trusting a surprising result.
 - **The fact-check is a strong filter, not a guarantee,** and the rule checks catch new numbers and tool
   names, not subtler inflation ("built" becoming "led"). Read applications before approving them.
 - **Web lookups and alert parsing are heuristic.** A lookup may find nothing, and alert email layouts

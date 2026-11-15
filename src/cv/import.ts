@@ -1,4 +1,4 @@
-import { usageCost, type CostMeter } from '../llm/cost.ts';
+import { timed, usageCost, type CostMeter } from '../llm/cost.ts';
 import { inflateSync } from 'node:zlib';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
@@ -146,13 +146,15 @@ export async function importCv(
           { type: 'text', text: `Convert this CV.${links.length ? `\n\nWeb addresses behind the file's links (not visible as text): ${links.join(', ')}` : ''}` },
         ]
       : [{ type: 'text', text: `Convert this CV:\n\n<cv>\n${text}\n</cv>` }];
-  const message = await client.messages.parse({
-    model,
-    max_tokens: 16000,
-    system: INSTRUCTIONS,
-    messages: [{ role: 'user', content }],
-    output_config: { format: zodOutputFormat(Extract), effort: 'low' },
-  });
+  const message = await timed(opts.meter, 'cv', model, () =>
+    client.messages.parse({
+      model,
+      max_tokens: 16000,
+      system: INSTRUCTIONS,
+      messages: [{ role: 'user', content }],
+      output_config: { format: zodOutputFormat(Extract), effort: 'low' },
+    }),
+  );
   if (message.stop_reason === 'refusal') throw new Error('The model declined to read this file.');
   if (message.stop_reason === 'max_tokens') throw new Error('The CV is too long to convert in one go.');
   if (!message.parsed_output) throw new Error('The model returned no CV.');

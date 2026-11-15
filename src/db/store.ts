@@ -194,6 +194,12 @@ const MIGRATIONS: Array<string | ((db: Database.Database) => void)> = [
   CREATE INDEX idx_usage_job ON usage(job_id);
     `);
   },
+  // 11: How long each model call took, and why a failed one failed (those rows have no tokens or cost).
+  (db) => {
+    const columns = (db.pragma('table_info(usage)') as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.includes('duration_ms')) db.exec('ALTER TABLE usage ADD COLUMN duration_ms INTEGER');
+    if (!columns.includes('error')) db.exec('ALTER TABLE usage ADD COLUMN error TEXT');
+  },
 ];
 
 export interface ResponseRecord {
@@ -227,6 +233,21 @@ export type ArchiveChoice = 'archived' | 'applied';
 
 /** Statuses of an application on its way to being sent. */
 export const UNSENT_STATUSES: readonly JobStatus[] = ['selected', 'tailored', 'tailor_error', 'approved', 'needs_manual', 'failed'];
+
+/** A job as reports count it: where it came from, where it stands, how it scored. */
+export interface JobSummary {
+  id: number;
+  source: JobRow['source'];
+  externalId: string;
+  status: JobStatus;
+  statusReason: string | null;
+  score: number | null;
+  scoredBy: string | null;
+  /** Known only from an alert's title and snippet. */
+  partial: boolean;
+  firstSeenAt: string;
+  duplicateOf: number | null;
+}
 
 export interface SubmissionRecord {
   id: number;
@@ -727,6 +748,45 @@ export class JobStore {
 
   submissions(jobId: number): SubmissionRecord[] {
     const rows = this.db.prepare('SELECT * FROM submissions WHERE job_id = ? ORDER BY id').all(jobId) as Array<Record<string, unknown>>;
+    return this.toSubmissions(rows);
+  }
+
+  // ---- everything at once, for reports that count across the whole database
+
+  /** Every job, without its description. */
+  jobSummaries(): JobSummary[] {
+    return this.db
+      .prepare(
+        `SELECT id, source, external_id AS externalId, status, status_reason AS statusReason, score, scored_by AS scoredBy,
+           description_is_partial AS partial, first_seen_at AS firstSeenAt, duplicate_of AS duplicateOf FROM jobs ORDER BY id`,
+      )
+      .all()
+      .map((r) => ({ ...(r as JobSummary), partial: Boolean((r as { partial: number }).partial) }));
+  }
+
+  /** Every status change of every job, oldest first. */
+  allHistory(): Array<{ jobId: number; from: string | null; to: string; reason: string | null; actor: string; at: string }> {
+    return this.db.prepare('SELECT job_id AS jobId, from_status AS "from", to_status AS "to", reason, actor, at FROM status_history ORDER BY id').all() as never;
+  }
+
+  /** Every version of every tailored application, oldest first. */
+  allApplications(): ApplicationRecord[] {
+    return (this.db.prepare('SELECT * FROM applications ORDER BY id').all() as DbApplicationRow[]).map(toApplication);
+  }
+
+  allSubmissions(): SubmissionRecord[] {
+    return this.toSubmissions(this.db.prepare('SELECT * FROM submissions ORDER BY id').all() as Array<Record<string, unknown>>);
+  }
+
+  /** Every run of every agent, with the stats it finished with (null for one that didn't finish). */
+  runs(): Array<{ id: number; agent: string; startedAt: string; finishedAt: string | null; stats: Record<string, unknown> | null }> {
+    const rows = this.db.prepare('SELECT id, agent, started_at, finished_at, stats_json FROM runs ORDER BY id').all() as Array<{
+      id: number; agent: string; started_at: string; finished_at: string | null; stats_json: string | null;
+    }>;
+    return rows.map((r) => ({ id: r.id, agent: r.agent, startedAt: r.started_at, finishedAt: r.finished_at, stats: r.stats_json ? JSON.parse(r.stats_json) : null }));
+  }
+
+  private toSubmissions(rows: Array<Record<string, unknown>>): SubmissionRecord[] {
     return rows.map((r) => ({
       id: r.id as number,
       jobId: r.job_id as number,
@@ -791,15 +851,15 @@ export class JobStore {
     this.db
       .prepare(
         `INSERT INTO usage (at, agent, purpose, model, job_id, run_id, input_tokens, output_tokens, cache_read_tokens,
-           cache_write_tokens, web_searches, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           cache_write_tokens, web_searches, cost, duration_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(u.at, u.agent, u.purpose, u.model, u.jobId, u.runId, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.webSearches, u.cost);
+      .run(u.at, u.agent, u.purpose, u.model, u.jobId, u.runId, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.webSearches, u.cost, u.durationMs, u.error);
   }
 
-  /** Spending since `sinceIso` (all time when omitted), by what the calls were for. */
+  /** Spending since `sinceIso` (all time when omitted), by what the calls were for. Calls that cost something: not failed ones or a local model's. */
   usageByPurpose(sinceIso?: string): Array<{ purpose: string; calls: number; cost: number }> {
     return this.db
-      .prepare('SELECT purpose, COUNT(*) AS calls, SUM(cost) AS cost FROM usage WHERE at >= ? GROUP BY purpose ORDER BY cost DESC')
+      .prepare(`SELECT purpose, COUNT(*) AS calls, SUM(cost) AS cost FROM usage WHERE at >= ? AND error IS NULL AND model NOT LIKE 'ollama:%' GROUP BY purpose ORDER BY cost DESC`)
       .all(sinceIso ?? '') as Array<{ purpose: string; calls: number; cost: number }>;
   }
 
@@ -810,7 +870,20 @@ export class JobStore {
 
   /** When spending was first recorded, or undefined if never. */
   usageSince(): string | undefined {
-    return (this.db.prepare('SELECT MIN(at) AS at FROM usage').get() as { at: string | null }).at ?? undefined;
+    return (this.db.prepare(`SELECT MIN(at) AS at FROM usage WHERE error IS NULL AND model NOT LIKE 'ollama:%'`).get() as { at: string | null }).at ?? undefined;
+  }
+
+  /** Every recorded model call, oldest first: Claude's, a local model's, and failed ones. */
+  usageRows(sinceIso?: string): UsageEntry[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT at, agent, purpose, model, job_id AS jobId, run_id AS runId, input_tokens AS inputTokens, output_tokens AS outputTokens,
+             cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens, web_searches AS webSearches, cost,
+             duration_ms AS durationMs, error FROM usage WHERE at >= ? ORDER BY id`,
+        )
+        .all(sinceIso ?? '') as UsageEntry[]
+    );
   }
 
   startRun(agent: string, now: string): number {

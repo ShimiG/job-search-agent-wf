@@ -65,7 +65,7 @@ async function main() {
   const root = process.cwd();
   if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
   const paths = resolvePaths(root);
-  const logger = createLogger();
+  const logger = createLogger(undefined, { dir: paths.logsDir, agent: 'submitter' });
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CostMeter } from '../llm/cost.ts';
 import { ollamaJson } from '../llm/ollama.ts';
 import { parseAppliedEmail, type RawEmail } from '../sources/applications.ts';
 import { jobBoardOf } from '../sources/job-boards.ts';
@@ -89,7 +90,7 @@ ${truncate(body.replace(/\n{3,}/g, '\n\n').trim(), 4_000)}
 </email>`;
 }
 
-export async function classifyEmail(mail: RawEmail, body: string, model: string): Promise<Classified> {
+export async function classifyEmail(mail: RawEmail, body: string, model: string, meter?: CostMeter): Promise<Classified> {
   // LinkedIn's and most ATSs' confirmations follow fixed wordings: no need to ask the model.
   const applied = parseAppliedEmail(mail);
   if (applied && !applied.rejected) {
@@ -103,6 +104,6 @@ export async function classifyEmail(mail: RawEmail, body: string, model: string)
       model: 'rules',
     };
   }
-  const x = await ollamaJson({ model, system: INSTRUCTIONS, user: emailForModel(mail, body), schema: Schema, timeoutMs: 300_000 });
+  const x = await ollamaJson({ model, system: INSTRUCTIONS, user: emailForModel(mail, body), schema: Schema, timeoutMs: 300_000, meter, purpose: 'reply' });
   return { kind: x.kind, company: x.company.trim(), title: x.job_title.trim(), summary: x.summary.trim(), action: x.action.trim(), model: `ollama:${model}` };
 }

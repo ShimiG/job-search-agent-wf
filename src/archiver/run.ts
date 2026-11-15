@@ -1,3 +1,4 @@
+import { CostMeter } from '../llm/cost.ts';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError, imapCredentialsFromEnv, loadJsonFile, SourcesSchema, type ImapCredentials, type Paths } from '../config.ts';
@@ -37,6 +38,8 @@ export interface ArchiverDeps {
   reportFile: string;
   /** How far back the first run reads, at most. */
   firstRunDays?: number;
+  /** Records the local model's calls (tokens and time; they cost nothing) with this run. */
+  meter?: CostMeter;
   now?: () => Date;
 }
 
@@ -51,7 +54,7 @@ export async function archive(paths: Paths, logger: Logger): Promise<ArchiverSta
   const { mailbox } = loadJsonFile(paths.sources, SourcesSchema).emailAlerts;
   const store = new JobStore(paths.db);
   try {
-    return await runArchiver({ store, credentials, mailbox, model, logger, reportFile: path.join(path.dirname(paths.db), 'applications-report.md') });
+    return await runArchiver({ store, credentials, mailbox, model, logger, reportFile: path.join(path.dirname(paths.db), 'applications-report.md'), meter: new CostMeter('archiver') });
   } finally {
     store.close();
   }
@@ -62,6 +65,7 @@ export async function runArchiver(deps: ArchiverDeps): Promise<ArchiverStats> {
   const now = deps.now ?? (() => new Date());
   const stats: ArchiverStats = { checked: 0, read: 0, replies: 0, matched: 0, recorded: 0, failed: 0 };
   const runId = store.startRun('archiver', now().toISOString());
+  deps.meter?.attach(store, runId);
   try {
     for (const job of store.archiveStale(14, now())) logger.info(`Archiver: #${job.id} ${job.company} — ${job.title} wasn't sent and hasn't changed in 14 days: moved to the archive`);
     await readNewMail(deps, stats);
@@ -85,6 +89,7 @@ export async function runArchiver(deps: ArchiverDeps): Promise<ArchiverStats> {
     );
     return stats;
   } finally {
+    deps.meter?.detach();
     store.finishRun(runId, stats, now().toISOString());
   }
 }
@@ -176,7 +181,7 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
         };
         let c;
         try {
-          c = await classifyEmail(mail, emailBodyText(mail.text, mail.html), model);
+          c = await classifyEmail(mail, emailBodyText(mail.text, mail.html), model, deps.meter);
         } catch (err) {
           stats.failed++;
           const message = (err as Error).message;

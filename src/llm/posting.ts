@@ -1,4 +1,4 @@
-import { usageCost, type CostMeter } from './cost.ts';
+import { timed, usageCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -146,14 +146,17 @@ export async function extractPosting(
   if (pageText.length < 200) return { ok: false, reason: 'the page has almost no text (it may need a login)', cost: 0 };
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
   const model = opts.model ?? 'claude-sonnet-5-5';
-  const message = await client.messages.parse({
-    model,
-    max_tokens: 8000,
-    system: INSTRUCTIONS,
-    messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
-    output_config: { format: zodOutputFormat(Extract), effort: 'low' },
-  });
   const jobId = (job as { id?: unknown } | null)?.id;
+  const message = await timed(opts.meter, 'posting', model, () =>
+    client.messages.parse({
+      model,
+      max_tokens: 8000,
+      system: INSTRUCTIONS,
+      messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
+      output_config: { format: zodOutputFormat(Extract), effort: 'low' },
+    }),
+    typeof jobId === 'number' ? jobId : null,
+  );
   const cost = opts.meter
     ? opts.meter.record('posting', model, message.usage, typeof jobId === 'number' ? jobId : null)
     : usageCost(model, message.usage);
@@ -219,13 +222,15 @@ export async function pastedPosting(
   if (description.length < 200) return { ok: false, reason: 'the description is too short to score or tailor from: paste the whole posting', cost: 0 };
   const client = opts.client ?? new Anthropic({ maxRetries: 3, timeout: 120_000 });
   const model = opts.model ?? 'claude-sonnet-5-5';
-  const message = await client.messages.parse({
-    model,
-    max_tokens: 1000,
-    system: DETAILS_INSTRUCTIONS,
-    messages: [{ role: 'user', content: `<posting>\n${description.slice(0, 60_000)}\n</posting>` }],
-    output_config: { format: zodOutputFormat(Details), effort: 'low' },
-  });
+  const message = await timed(opts.meter, 'posting', model, () =>
+    client.messages.parse({
+      model,
+      max_tokens: 1000,
+      system: DETAILS_INSTRUCTIONS,
+      messages: [{ role: 'user', content: `<posting>\n${description.slice(0, 60_000)}\n</posting>` }],
+      output_config: { format: zodOutputFormat(Details), effort: 'low' },
+    }),
+  );
   const cost = opts.meter ? opts.meter.record('posting', model, message.usage) : usageCost(model, message.usage);
   const x = message.parsed_output;
   if (message.stop_reason === 'refusal' || !x) return { ok: false, reason: 'the description could not be read', cost };
