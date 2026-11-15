@@ -110,6 +110,23 @@ project with the same ID or the same name replaces the old entry, the rest are a
 file doesn't list stay (`--replace-all` removes them). Highlight IDs must be unique across the CV. The
 old CV is kept next to it as a backup.
 
+### Links in your CV
+
+Your portfolio, website, LinkedIn and GitHub addresses live in the CV's `links`. Each is printed in the
+header of every tailored CV, and the Submitter types it into the matching form field: `linkedin` and
+`github` into theirs, `website` or `portfolio` into any field that asks for a portfolio, website,
+personal site or blog. To set one without uploading the CV again:
+
+```bash
+npm run scout -- cv-link portfolio https://you.example.com/
+npm run scout -- cv-link                       # list them
+npm run scout -- cv-link portfolio --remove
+```
+
+The address has to be written in full, starting with `https://`. A `profile.linkedin`, `profile.github`
+or `profile.website` set in `config/submit.json` is what forms get instead, and `website` comes before
+`portfolio`; the command says so when one of those is in the way. The old CV is kept as a backup.
+
 ### Checking your CV
 
 The Tailor only rewords what your CV says and never adds a figure, so a weak highlight stays weak in
@@ -676,6 +693,7 @@ npm run scout -- show <id> | pick <id...> | dismiss <id...> | remove <id...> | r
 npm run scout -- sources | add-source <careers-url> [--company "Name"] [--token T]
 npm run scout -- results
 npm run scout -- cv-projects <file.json> [--replace-all]
+npm run scout -- cv-link [<name> <url> | <name> --remove]
 npm run scout -- cv-check
 npm run scout -- watch [--cron "0 8 * * *"]
 npm run scout -- compare-scorers [--limit 40]
@@ -734,6 +752,7 @@ src/
   cv/import.ts           CV upload: PDF/Word to the master CV
   cv/certificates.ts     your certificates: validation, storage, what the Tailor sees
   cv/audit.ts            the CV check: wording, numbers, skills
+  cv/links.ts            the CV's links: portfolio, website, LinkedIn, GitHub
   settings.ts            settings saved from the review page (the shortlist's minimum score)
   tailor/                draft, rules, fact-check, render, bullet style, PDF text check
   submit/                answers, form filling, security codes, modes and records

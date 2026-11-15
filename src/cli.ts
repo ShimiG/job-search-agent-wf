@@ -21,6 +21,7 @@ import { AnthropicEnricher } from './llm/enrich.ts';
 import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
 import { auditCv, formatAudit } from './cv/audit.ts';
+import { FORM_FIELD, LinkError, overriddenBy, setCvLink } from './cv/links.ts';
 import { mergeProjects, parseProjectsFile } from './cv/projects.ts';
 import { cvStatus, UPLOAD_CV_FIRST } from './cv/ready.ts';
 import { compareWithClaude, formatComparison } from './llm/compare.ts';
@@ -65,6 +66,8 @@ Commands:
   cv-projects <file.json> [--replace-all]
                                Update the projects in your CV from a file: same ID or name replaces, the rest
                                are added; --replace-all also removes projects the file doesn't list
+  cv-link [<name> <url>]       Set a link in your CV (portfolio, website, linkedin, github...): printed in the CV header
+                               and typed into the matching form field. <name> --remove takes it out; no arguments lists them
   cv-check                     Check your CV's own wording: weak bullets, bullets with no number, skills nothing backs up
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
   watch [--cron "0 8 * * *"]   Keep running and do a full run on a schedule
@@ -267,6 +270,44 @@ function commandAddSource(paths: Paths, url: string | undefined, values: Record<
 }
 
 /** Replaces or adds projects in data/master-cv.json from a file, keeping a backup of the old CV. */
+function commandCvLink(paths: Paths, name: string | undefined, url: string | undefined, remove: boolean) {
+  if (!existsSync(paths.masterCv)) throw new ConfigError(`No CV yet at ${paths.masterCv}. Upload one on the review page first (Settings → Your CV).`);
+  const cv = loadJsonFile(paths.masterCv, MasterCvSchema);
+  const FIELD_NAMES = { linkedin: 'LinkedIn', github: 'GitHub', website: 'portfolio and website' };
+  const fills = (key: string) => (FORM_FIELD[key.toLowerCase()] ? `, typed into ${FIELD_NAMES[FORM_FIELD[key.toLowerCase()]!]} fields on forms` : '');
+  if (!name) {
+    const links = Object.entries(cv.links);
+    if (!links.length) console.log('Your CV has no links yet. Add one with: npm run scout -- cv-link portfolio https://...');
+    for (const [k, v] of links) console.log(/^todo\b/i.test(v.trim()) ? `${k}: not filled in yet` : `${k}: ${v}  (in the CV header${fills(k)})`);
+    return;
+  }
+  if (!remove && !url) throw new ConfigError('Usage: cv-link <name> <url>   or   cv-link <name> --remove');
+  let change;
+  try {
+    change = setCvLink(cv, name, remove ? null : url!);
+  } catch (err) {
+    if (err instanceof LinkError) throw new ConfigError(err.message);
+    throw err;
+  }
+  const backup = paths.masterCv.replace(/\.json$/, `.backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  copyFileSync(paths.masterCv, backup);
+  writeFileSync(paths.masterCv, JSON.stringify(change.cv, null, 2) + '\n');
+  if (remove) return console.log(`Removed the "${change.key}" link (${change.previous}). The old CV is at ${backup}`);
+  console.log(`${change.key}: ${change.cv.links[change.key]}${change.previous ? `  (was ${change.previous})` : ''}`);
+  console.log(`It is in the header of every CV the Tailor writes from now on${fills(change.key)}. The old CV is at ${backup}`);
+  // The Submitter's own profile settings win over the CV's links: say so when one is in the way.
+  let profile = {};
+  if (existsSync(paths.submit)) {
+    try {
+      profile = (JSON.parse(readFileSync(paths.submit, 'utf8')) as { profile?: object }).profile ?? {};
+    } catch {
+      // An unreadable submit.json is reported when the Submitter runs.
+    }
+  }
+  const blocked = overriddenBy(change.cv, change.key, profile);
+  if (blocked) console.log(`Note: ${blocked}`);
+}
+
 function commandCvProjects(paths: Paths, file: string | undefined, replaceAll: boolean) {
   if (!file) throw new ConfigError('Usage: cv-projects <file.json> [--replace-all]');
   if (!existsSync(file)) throw new ConfigError(`No such file: ${file}`);
@@ -350,6 +391,7 @@ async function main() {
       'no-score': { type: 'boolean' },
       batch: { type: 'boolean' },
       'replace-all': { type: 'boolean' },
+      remove: { type: 'boolean' },
       'open-review': { type: 'boolean' },
       status: { type: 'string' },
       all: { type: 'boolean' },
@@ -435,6 +477,8 @@ async function main() {
       return commandAddSource(paths, args[0], values);
     case 'cv-projects':
       return commandCvProjects(paths, args[0], Boolean(values['replace-all']));
+    case 'cv-link':
+      return commandCvLink(paths, args[0], args[1], Boolean(values.remove));
     case 'cv-check':
       if (!existsSync(paths.masterCv)) throw new ConfigError(`No CV yet at ${paths.masterCv}. Upload one on the review page first (Settings → Your CV).`);
       console.log(formatAudit(auditCv(loadJsonFile(paths.masterCv, MasterCvSchema))));
