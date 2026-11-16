@@ -115,6 +115,21 @@ describe('the fact-check suite', () => {
   it('the plural of an acronym the CV uses is not a new term', () => {
     assert.deepEqual(unknownTerms('Developed support agents powered by LLMs and REST APIs', 'LLM-powered agents over a REST API'), []);
     assert.deepEqual(unknownTerms('Ran it on GPUs', 'LLM-powered agents'), ['GPUs']);
+    // And the other way round: the CV has the plural, the letter the singular.
+    assert.deepEqual(unknownTerms('I track one KPI per LLM feature', 'Reported KPIs for features built on LLMs'), []);
+    assert.deepEqual(unknownTerms('I read many CVs', 'nothing about that word here'), []);
+  });
+
+  it('a hyphenated word is as new as the names in it', () => {
+    const cv = 'Built agents with the Claude API and RAG pipelines on AWS. Developed AI tools for Windows desktops in 2023.';
+    // What a real set of cover letters was flagged for: none of it claims anything this CV doesn't say.
+    const letter = 'I build Claude-based agents and RAG-style retrieval, AWS-native where it helps, with a Windows-focused past. Since mid-2023 my CV has been AI-reworded for each job.';
+    assert.deepEqual(unknownTerms(letter, cv), []);
+    // The name inside the compound still has to be yours.
+    assert.deepEqual(unknownTerms('I build Kubernetes-based platforms and Azure-native services', cv), ['Kubernetes-based', 'Azure-native']);
+    assert.deepEqual(unknownTerms('I deployed it with Node-RED on GPT-4.1', 'Built flows in Node.js on GPT-4'), ['Node-RED']);
+    // A term found in the posting counts as known for a letter, as before.
+    assert.deepEqual(unknownTerms('Your Terraform-heavy stack', cv, 'We use Terraform'), []);
   });
 
   it('with a fact-checker: what the rules let through is judged by it, and the two are counted apart', async () => {

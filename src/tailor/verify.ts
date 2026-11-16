@@ -64,17 +64,41 @@ export function extractTerms(text: string): string[] {
     const sentenceStart = before === '' || /[.!?:\n•\-–—"“(]$/.test(before);
     const techShape = /[0-9.+#/]/.test(token) || /[A-Z]/.test(token.slice(1));
     const capitalized = /^[A-Z]/.test(token);
-    if (COMMON_CAPITALIZED.has(token.toLowerCase())) continue;
+    if (COMMON_CAPITALIZED.has(token.toLowerCase()) || COMMON_CAPITALIZED.has(singular(token).toLowerCase())) continue;
     if (techShape || (capitalized && !sentenceStart)) terms.add(token.replace(/[.,]+$/, ''));
   }
   return [...terms];
 }
 
 /** "LLMs" and "APIs" are "LLM" and "API": the plural of an acronym your CV uses isn't a new claim. */
-const singular = (term: string) => (/^[A-Z][A-Z0-9]+s$/.test(term) ? term.slice(0, -1) : term);
+function singular(term: string): string {
+  return /^[A-Z][A-Z0-9]+s$/.test(term) ? term.slice(0, -1) : term;
+}
 
+/** An acronym and its plural are one term, whichever of the two your CV happens to use. */
+const forms = (term: string) => (/^[A-Z][A-Z0-9]+s$/.test(term) ? [term, term.slice(0, -1)] : /^[A-Z][A-Z0-9]+$/.test(term) ? [term, `${term}s`] : [term]);
+const isKnown = (term: string, corpora: string[]) => forms(term).some((f) => corpora.some((c) => containsKeyword(c, f)));
+
+/**
+ * The parts of a hyphenated word that name something. "Claude-based" names Claude and "AWS-native"
+ * names AWS: "based" and "native" are ordinary words, and a bare number ("mid-2023") is for the number
+ * check, not this one.
+ */
+function namedParts(term: string): string[] {
+  return term.split('-').filter((p) => /[A-Za-z]/.test(p) && (/^[A-Z]/.test(p) || /[0-9.+#/]/.test(p) || /[A-Z]/.test(p.slice(1))) && !COMMON_CAPITALIZED.has(p.toLowerCase()));
+}
+
+/**
+ * Tools, products and proper nouns in `text` that none of the `corpora` mention. A hyphenated word
+ * is as new as the names in it: "Claude-based" claims nothing your CV's "Claude API" doesn't, while
+ * "Kubernetes-based" still does when Kubernetes appears nowhere.
+ */
 export const unknownTerms = (text: string, ...corpora: string[]) =>
-  extractTerms(text).filter((t) => !corpora.some((c) => containsKeyword(c, t) || containsKeyword(c, singular(t))));
+  extractTerms(text).filter((t) => {
+    if (isKnown(t, corpora)) return false;
+    if (!t.includes('-')) return true;
+    return namedParts(t).some((p) => !isKnown(p, corpora));
+  });
 
 export const unknownNumbers = (text: string, ...allowed: string[]) => {
   const known = new Set(allowed.flatMap(extractNumbers));
