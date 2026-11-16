@@ -350,3 +350,76 @@ export async function runDecisionsEval(opts: { cases: DecisionCase[]; scorer: Sc
     ],
   };
 }
+
+// ---------------------------------------------------------------- learning from your decisions
+
+/**
+ * Does showing the scorer your past decisions make its scores agree with you more? Your older
+ * decisions are the examples; your newer ones are the test, scored twice by the same model: once as
+ * Scout scores today, once with the examples. Nothing the test contains was shown as an example, and
+ * every example was decided before every test job, as it would be in use.
+ */
+export async function runLearningEval(opts: {
+  /** The newer decisions. */
+  cases: DecisionCase[];
+  without: Scorer;
+  withExamples: Scorer;
+  /** How many of the older decisions were shown. */
+  shown: { picked: number; dismissed: number };
+  concurrency?: number;
+  log?: (line: string) => void;
+}): Promise<SuiteOutput> {
+  const before = new Map<number, number>();
+  const after = new Map<number, number>();
+  const results = await pool(opts.cases, opts.concurrency ?? 3, async (c): Promise<CaseResult> => {
+    const expected = c.decision === 'yes' ? 'shortlist' : 'reject';
+    try {
+      const plain = (await opts.without.score(c.job)).score;
+      const taught = (await opts.withExamples.score(c.job)).score;
+      before.set(c.id, plain);
+      after.set(c.id, taught);
+      const got = taught >= c.cutoff ? 'shortlist' : 'reject';
+      opts.log?.(`#${c.id}: ${plain} -> ${taught}, you ${c.decision === 'yes' ? 'picked it' : 'dismissed it'}`);
+      return { id: `#${c.id}`, kind: c.decision, expected, got: `${got} (${plain} -> ${taught})`, pass: got === expected };
+    } catch (err) {
+      opts.log?.(`ERR  #${c.id}: ${message(err)}`);
+      return { id: `#${c.id}`, kind: c.decision, expected, got: '', pass: false, error: message(err) };
+    }
+  });
+
+  const scored = opts.cases.filter((c) => after.has(c.id));
+  const yes = scored.filter((c) => c.decision === 'yes');
+  const no = scored.filter((c) => c.decision === 'no');
+  const pct = (x: number | null) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`);
+  const arm = (scores: Map<number, number>) => {
+    const of = (rows: DecisionCase[]) => rows.map((c) => scores.get(c.id)!);
+    const kept = (rows: DecisionCase[]) => rows.filter((c) => scores.get(c.id)! >= c.cutoff).length;
+    return {
+      ranking: pct(auc(of(yes), of(no))),
+      picks: count(kept(yes), yes.length),
+      dismissals: count(kept(no), no.length),
+      shortlist: count(kept(yes), kept(yes) + kept(no)),
+      // A score exactly at the cutoff is the scorer letting a posting through without an opinion.
+      atCutoff: count(scored.filter((c) => scores.get(c.id) === c.cutoff).length, scored.length),
+      medians: `${median(of(yes)) ?? 'n/a'} and ${median(of(no)) ?? 'n/a'}`,
+    };
+  };
+  const [plain, taught] = [arm(before), arm(after)];
+  const moved = scored.length ? scored.reduce((n, c) => n + Math.abs(after.get(c.id)! - before.get(c.id)!), 0) / scored.length : null;
+  const pair = (label: string, a: EvalMetric['count'] | string, b: EvalMetric['count'] | string): EvalMetric[] =>
+    [[`${label}, as Scout scores today`, a] as const, [`${label}, shown your past decisions`, b] as const].map(([l, v]) => (typeof v === 'string' ? { label: l, value: v } : { label: l, count: v }));
+  return {
+    results,
+    metrics: [
+      { label: 'Jobs in the test (the newer half of your decisions)', value: `${yes.length} you picked, ${no.length} you dismissed` },
+      { label: 'Examples shown (from the older half)', value: `${opts.shown.picked} you picked, ${opts.shown.dismissed} you passed on` },
+      ...pair('Chance a job you picked outscores one you dismissed', plain.ranking, taught.ranking),
+      ...pair('Jobs you picked, scored at or above the cutoff', plain.picks, taught.picks),
+      ...pair('Jobs you dismissed, scored at or above the cutoff (lower is better)', plain.dismissals, taught.dismissals),
+      ...pair('Share of that shortlist you would pick', plain.shortlist, taught.shortlist),
+      ...pair('Jobs scored exactly at the cutoff (no opinion either way)', plain.atCutoff, taught.atCutoff),
+      ...pair('Median score of a pick and of a dismissal', plain.medians, taught.medians),
+      { label: 'Average change in a score from seeing the examples', value: moved === null ? 'n/a' : `${moved.toFixed(1)} points` },
+    ],
+  };
+}

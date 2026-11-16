@@ -64,6 +64,35 @@ Nothing in your database changes, and the postings go where Scout sends them whe
 what scoring that many jobs costs, and the advisor is the expensive part, so run `--no-advisor` first.
 It is your data: nobody else can rerun it, the report names no job, and it is not part of `all`.
 
+## Would your past decisions help the scorer?
+
+Re-scoring showed where the scorer runs out: a job scored 70 or more was picked 12 times out of 14,
+but from 55 to 69 picks and dismissals were mixed about evenly, and a third of the jobs sat on exactly
+55, the cutoff for a posting known only by its title. A stronger model changed nothing, because there
+is nothing more in a title to reason about. What tells those jobs apart is your own taste, and the
+scorer has only a short note about it.
+
+So the scorer can be shown your past decisions as examples (`"decisionExamples": 20` under `"scoring"`
+in `config/preferences.json`; off by default). Whether that helps is a question about your search, and
+this answers it:
+
+```bash
+npm run eval -- learning
+npm run eval -- learning --examples 30
+```
+
+Your decisions are put in the order you made them. The older half supplies the examples (your latest
+picks, and your latest passes from the shortlist, chosen as Scout would choose them); the newer half
+is the test. The same model scores each test job twice, as Scout scores today and shown the examples,
+and the result has both side by side: how often a pick outscores a dismissal, what the cutoff keeps,
+and how many jobs still sit exactly on the cutoff. No test job is among the examples, and every example
+was decided before every test job, as it would be in use.
+
+It runs without the advisor unless you pass `--with-advisor` (two scores a job; with the advisor that
+is dollars), so it costs a few cents. The test is half of your decisions: with about 45 jobs, a
+difference of a few points is noise, and only a clear gap means something. As with `decisions`, nothing
+in your database changes and the report names no job.
+
 ## Reading the results
 
 - The samples are small. A kind has 4 to 12 cases, so one case moves its rate by 8 to 25 points: use

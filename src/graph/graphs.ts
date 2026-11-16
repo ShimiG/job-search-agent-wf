@@ -1,6 +1,7 @@
 // LangGraph wrappers around the three agents, served by `npm run graph` (langgraph.json).
 // Each agent keeps its own logic; these graphs build the same dependencies the CLIs build,
 // and the pipeline graph replaces "pick" and "approve" on the command line with interrupts.
+import { examplesFor } from '../pipeline/past-decisions.ts';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Annotation, END, START, StateGraph, interrupt } from '@langchain/langgraph';
@@ -95,7 +96,7 @@ export async function scoutAgent(noScore = false): Promise<RunStats> {
   const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
   const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
   return withStore((store) => {
-    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter, decisions: examplesFor(store, prefs) });
     // The web lookup is Claude's, so it needs the API key even when scoring is local.
     const enricher = scorer && prefs.enrich.enabled && process.env.ANTHROPIC_API_KEY ? new AnthropicEnricher({ model: process.env.ENRICH_MODEL, meter }) : undefined;
     return runScout({ store, adapters: buildAdapters(paths, logger), http: new FetchHttp(), prefs, logger, scorer, applied, enricher, meter, checkLinkedIn: emailAlerts.checkClosed ? undefined : null });

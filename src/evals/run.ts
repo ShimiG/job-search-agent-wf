@@ -6,7 +6,9 @@ import { rate, usd } from '../report/format.ts';
 import { TailorConfigSchema, type TailorConfig } from '../tailor/schema.ts';
 import type { JobStore } from '../db/store.ts';
 import { cutoff } from '../pipeline/run.ts';
+import { decisionExamples, pastDecisions, type DecisionExamples } from '../pipeline/past-decisions.ts';
 import { FactCheckCase, ReplyCase, ScoringCase, type DecisionCase, type SuiteOutput } from './suites.ts';
+import { OWN_JOBS } from './types.ts';
 import { readCases, type EvalResult } from './types.ts';
 
 /** The checked-in cases: evals/ at the top of the repository. Everything in it is fictional. */
@@ -18,6 +20,7 @@ export const SUITES = {
   factcheck: { title: 'Fact-check: invented claims in a reworded CV', file: 'factcheck.jsonl' },
   replies: { title: 'Sorting replies to applications', file: 'replies.jsonl' },
   decisions: { title: 'Your own decisions, re-scored', file: '' },
+  learning: { title: 'Learning from your decisions: older ones as examples, newer ones as the test', file: '' },
 } as const;
 export type SuiteName = keyof typeof SUITES;
 export const SUITE_NAMES = Object.keys(SUITES) as SuiteName[];
@@ -25,6 +28,7 @@ export const SUITE_NAMES = Object.keys(SUITES) as SuiteName[];
 export const FIXED_SUITES: SuiteName[] = ['scoring', 'factcheck', 'replies'];
 const ABOUT: Partial<Record<SuiteName, string>> = {
   decisions: 'Not a fixed test set: these are jobs you picked or dismissed, scored again and measured against what you chose. The jobs are yours, so nobody else can rerun it.',
+  learning: 'Not a fixed test set: your own jobs. The same model scores the newer half of your decisions twice, without and with the older half shown as examples; no test job is among the examples.',
 };
 
 /** The fictional candidate every case is written against. */
@@ -88,7 +92,7 @@ export function formatEvalResult(r: EvalResult): string {
     ...r.metrics.map((m) => `${m.label.padEnd(width)}  ${m.count ? rate(m.count) : (m.value ?? 'n/a')}`),
   ];
   // Your own jobs aren't listed one by one: what counts there is the ranking, not each case.
-  const wrong = r.suite === 'decisions' ? [] : r.results.filter((x) => !x.pass && !x.error);
+  const wrong = OWN_JOBS.includes(r.suite) ? [] : r.results.filter((x) => !x.pass && !x.error);
   if (wrong.length) lines.push('', 'Wrong:', ...wrong.map((x) => `- ${x.id}: expected ${x.expected}, got ${x.got}${x.note ? ` (${x.note})` : ''}`));
   const failed = r.results.filter((x) => x.error);
   if (failed.length) lines.push('', 'Could not be run (left out of every rate):', ...failed.map((x) => `- ${x.id}: ${x.error}`));
@@ -116,4 +120,28 @@ export function loadDecisionCases(store: JobStore, prefs: Preferences, opts: { a
     if (job) out.push({ id: s.id, decision, job, cutoff: cutoff(job, prefs), storedScore: s.score });
   }
   return out;
+}
+
+/**
+ * The split for the learning suite. Your decisions on scored jobs (shortlisted ones, unless `all`),
+ * in the order you made them: the newer half is the test, and the examples are your decisions from
+ * before the first test job, chosen exactly as Scout chooses them. `limit` keeps that many of the
+ * newest picks and dismissals in the test.
+ */
+export function loadLearningSplit(
+  store: JobStore,
+  prefs: Preferences,
+  opts: { all?: boolean; perSide: number; limit?: number },
+): { cases: DecisionCase[]; examples: DecisionExamples; splitAt: string | null } {
+  const decided = pastDecisions(store).filter((d) => d.job.score !== null && (opts.all || d.shortlisted));
+  const newer = decided.slice(Math.floor(decided.length / 2));
+  const splitAt = newer[0]?.at ?? null;
+  // The examples are decisions made strictly before the first test job, so nothing in the test is among them.
+  let cases: DecisionCase[] = newer.map((d) => ({ id: d.jobId, decision: d.decision === 'picked' ? ('yes' as const) : ('no' as const), job: d.job, cutoff: cutoff(d.job, prefs), storedScore: d.job.score! }));
+  if (opts.limit) {
+    const last = (decision: 'yes' | 'no') => cases.filter((c) => c.decision === decision).slice(-opts.limit!);
+    const keep = new Set([...last('yes'), ...last('no')].map((c) => c.id));
+    cases = cases.filter((c) => keep.has(c.id));
+  }
+  return { cases, examples: splitAt ? decisionExamples(store, opts.perSide, { before: splitAt }) : { picked: [], dismissed: [] }, splitAt };
 }

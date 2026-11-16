@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { rate, usd } from '../report/format.ts';
-import type { EvalResult, EvalSummary } from './types.ts';
+import { OWN_JOBS, type EvalResult, type EvalSummary } from './types.ts';
 
 /*
  * The same suite run with different models, side by side: the way to decide whether a cheaper model
@@ -35,7 +35,7 @@ export function loadComparisons(evalsDir: string): SuiteComparison[] {
     const newest = mine[0]!;
     const runs: EvalSummary[] = [];
     // Your own decisions grow by a job or two between runs: still the same test. A fixed suite with other cases isn't.
-    const comparable = (r: EvalSummary) => suite === 'decisions' || r.cases === newest.cases;
+    const comparable = (r: EvalSummary) => OWN_JOBS.includes(suite) || r.cases === newest.cases;
     for (const r of mine) if (comparable(r) && !runs.some((x) => x.model === r.model)) runs.push(r);
     out.push({ suite, title: newest.title, runs });
   }

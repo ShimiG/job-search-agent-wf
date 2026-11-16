@@ -1,3 +1,4 @@
+import { examplesFor } from './pipeline/past-decisions.ts';
 import { cliErrorMessage } from './util/cli-error.ts';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -164,7 +165,9 @@ async function commandRun(paths: Paths, logger: Logger, noScore: boolean, batch 
   }
   const store = new JobStore(paths.db);
   try {
-    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
+    const decisions = examplesFor(store, prefs);
+    if (cv && decisions) logger.info(`Scoring with your past decisions as examples: ${decisions.picked.length} jobs you picked, ${decisions.dismissed.length} you passed on.`);
+    const scorer = cv && createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter, decisions });
     const { emailAlerts } = loadJsonFile(paths.sources, SourcesSchema);
     const applied = appliedEmailsSource(emailAlerts, imapCredentialsFromEnv());
     // The web lookup is Claude's, so it needs the API key even when scoring is local.

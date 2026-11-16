@@ -345,11 +345,13 @@ npm run eval -- replies                 # the Archiver's local model sorting 38 
 npm run eval -- all
 npm run eval -- compare                 # each suite's latest run per model, side by side
 npm run eval -- decisions [--no-advisor]  # your own picks and dismissals, re-scored (your data, not a fixed set)
+npm run eval -- learning                  # would your past decisions, shown as examples, improve the scores?
 ```
 
 `decisions` is the one to use when choosing a model or deciding whether the advisor is worth its cost:
 the fixed cases have clear answers that every model gets right, while your own shortlist is where
-scores are close. See [`evals/README.md`](evals/README.md).
+scores are close. `learning` tests whether showing the scorer your past decisions would help (below).
+See [`evals/README.md`](evals/README.md).
 
 `scoring` and `factcheck` call Claude (a few cents; the result says how much) and `replies` needs
 Ollama. `--model` tests a different model, which makes these the way to compare Haiku with Sonnet, or
@@ -595,6 +597,16 @@ caps scoring per run; the rest wait for the next run. Postings are untrusted inp
 model to ignore instructions inside them. After changing preferences or your CV,
 `npm run scout -- reevaluate` sends Scout's jobs back through filters and scoring.
 
+**Learning from your decisions** (off by default). A score separates a clear fit from a clear miss; in
+between, and for a posting known only by its title, what separates a yes from a no is your own taste.
+With `"decisionExamples": 20` under `"scoring"` in `config/preferences.json`, the scorer is also shown
+the last 20 jobs you picked or applied to and the last 20 you passed on from your shortlist (title,
+company and location only), and told to lean on them when a posting gives it little else. A full
+posting's requirements and dealbreakers still decide, and the past postings are treated as data, like
+any posting. It needs at least 3 of each to switch on, and a score given this way is saved as
+`<model>+decisions`. Whether it helps your search is measurable before you turn it on:
+`npm run eval -- learning` (see [Evals](#evals)).
+
 **Batch scoring** (`npm run scout -- run --batch`, or `--batch` on the schedule) sends the run's
 postings to Claude as one batch: every token costs half as much, and the scores come back later,
 usually within the hour and 24 hours at most. It suits runs nobody is waiting on.
@@ -818,6 +830,7 @@ npm run archive [-- --recheck <days>]
 npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--no-advisor] [--quiet]
 npm run eval -- compare
 npm run eval -- decisions [--no-advisor] [--all] [--model M] [--limit N]
+npm run eval -- learning [--examples N] [--all] [--model M] [--with-advisor] [--limit N]
 
 # Tailor
 npm run tailor -- run [--job 12,15] [--no-pdf]

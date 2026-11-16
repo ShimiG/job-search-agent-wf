@@ -11,8 +11,9 @@ import { ollamaHasModel, ollamaModel } from '../llm/ollama.ts';
 import { createScorer, scorerProblem } from '../llm/scorer.ts';
 import { AnthropicTailor } from '../tailor/llm.ts';
 import { formatComparisons, loadComparisons } from './compare.ts';
-import { FIXED_SUITES, formatEvalResult, loadDecisionCases, loadEvalProfile, loadFactCheckCases, loadReplyCases, loadScoringCases, SUITE_NAMES, toResult, type SuiteName } from './run.ts';
-import { runDecisionsEval, runFactCheckEval, runRepliesEval, runScoringEval } from './suites.ts';
+import { MIN_EXAMPLES } from '../pipeline/past-decisions.ts';
+import { FIXED_SUITES, formatEvalResult, loadDecisionCases, loadLearningSplit, loadEvalProfile, loadFactCheckCases, loadReplyCases, loadScoringCases, SUITE_NAMES, toResult, type SuiteName } from './run.ts';
+import { runDecisionsEval, runFactCheckEval, runLearningEval, runRepliesEval, runScoringEval } from './suites.ts';
 import { saveEvalResult, type EvalResult } from './types.ts';
 
 const HELP = `Evals: fixed, fictional test cases run through the code the agents use.
@@ -31,6 +32,11 @@ Usage: npm run eval -- <suite> [options]
                for "is this model, or the advisor, worth it for my search". Uses SCOUT_MODEL; costs
                what scoring that many jobs costs (the advisor is the expensive part). Nothing in your
                database changes.
+
+  learning     Also your own jobs: would showing the scorer your past decisions help? The older half
+               of your decisions become examples and the newer half is scored twice, without and
+               with them. Runs without the advisor unless you pass --with-advisor, so it costs cents.
+               If it helps, turn it on with "decisionExamples" under "scoring" in preferences.json.
   compare      Each suite's latest run per model, side by side. Runs nothing.
 
 Options:
@@ -38,7 +44,9 @@ Options:
   --limit <n>      At most n cases of each kind: a cheap first look
   --rules-only     factcheck: only the rule checks, no model call and no cost
   --no-advisor     scoring, decisions: without the stronger model the scorer may consult, to see what it adds
-  --all            decisions: every scored job you decided on, not only the ones that were shortlisted
+  --all            decisions, learning: every scored job you decided on, not only the ones that were shortlisted
+  --examples <n>   learning: how many picks and how many passes to show (default 20)
+  --with-advisor   learning: keep the advisor on (it multiplies the cost)
   --quiet          Don't print each case as it finishes
 
 Each result is saved under data/evals/ and included by: npm run scout -- case-study
@@ -48,9 +56,47 @@ The scoring and factcheck suites call Claude and cost money (cents); the result 
 /** Thrown when a suite can't run with what is set up; "all" skips it and carries on. */
 class NotSetUp extends Error {}
 
-async function runSuite(suite: SuiteName, opts: { model?: string; limit?: number; rulesOnly: boolean; noAdvisor?: boolean; all?: boolean; log?: (line: string) => void }): Promise<EvalResult> {
+async function runSuite(
+  suite: SuiteName,
+  opts: { model?: string; limit?: number; rulesOnly: boolean; noAdvisor?: boolean; withAdvisor?: boolean; all?: boolean; examples?: number; log?: (line: string) => void },
+): Promise<EvalResult> {
   const meter = new CostMeter('eval');
   const cost = () => meter.totals().total;
+
+  if (suite === 'learning') {
+    const paths = resolvePaths();
+    if (!existsSync(paths.masterCv) || !existsSync(paths.db)) throw new NotSetUp('There is no CV or job database here yet: this suite scores jobs you have decided on.');
+    const model = opts.model ?? process.env.SCOUT_MODEL;
+    // Two scores per job: with the advisor on that is dollars, and the advisor is not what is being tested.
+    if (!opts.withAdvisor) process.env.SCOUT_ADVISOR_MODEL = 'off';
+    const problem = await scorerProblem(model);
+    if (problem) throw new NotSetUp(problem);
+    const prefs = loadJsonFile(paths.preferences, PreferencesSchema);
+    const cv = withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir);
+    const store = new JobStore(paths.db);
+    try {
+      const perSide = opts.examples ?? (prefs.scoring.decisionExamples || 20);
+      const { cases, examples } = loadLearningSplit(store, prefs, { all: opts.all, perSide, limit: opts.limit });
+      const [yes, no] = [cases.filter((c) => c.decision === 'yes').length, cases.filter((c) => c.decision === 'no').length];
+      if (!yes || !no) throw new NotSetUp(`The newer half of your decisions needs both picks and dismissals to test on: it has ${yes} and ${no}.`);
+      if (examples.picked.length < MIN_EXAMPLES || examples.dismissed.length < MIN_EXAMPLES) {
+        throw new NotSetUp(`The older half of your decisions has ${examples.picked.length} picks and ${examples.dismissed.length} passes from your shortlist: too few to serve as examples (${MIN_EXAMPLES} of each at least).`);
+      }
+      console.error(
+        `Scoring ${cases.length} jobs twice (${yes} you picked, ${no} you dismissed), with ${examples.picked.length} earlier picks and ${examples.dismissed.length} earlier passes as the examples.` +
+          `${opts.withAdvisor ? '' : ' The advisor is off for this run.'} Nothing in your database changes.`,
+      );
+      const local = () => store.listClaudeScored();
+      const without = createScorer({ cv, prefs, model, examples: local, meter });
+      const withExamples = createScorer({ cv, prefs, model, examples: local, meter, decisions: examples });
+      const output = await runLearningEval({
+        cases, without, withExamples, shown: { picked: examples.picked.length, dismissed: examples.dismissed.length }, concurrency: ollamaModel(model) ? 1 : 3, log: opts.log,
+      });
+      return toResult(suite, without.model ?? model ?? 'claude-sonnet-5-5', output, cost());
+    } finally {
+      store.close();
+    }
+  }
 
   if (suite === 'decisions') {
     // Your own jobs, CV and preferences: the scorer is built exactly as Scout builds it.
@@ -68,6 +114,8 @@ async function runSuite(suite: SuiteName, opts: { model?: string; limit?: number
       const [yes, no] = [cases.filter((c) => c.decision === 'yes').length, cases.filter((c) => c.decision === 'no').length];
       if (!yes || !no) throw new NotSetUp(`It needs jobs you picked and jobs you dismissed${opts.all ? '' : ' from your shortlist'}: there are ${yes} and ${no}.`);
       console.error(`Re-scoring ${cases.length} jobs (${yes} you picked, ${no} you dismissed). Nothing in your database changes.`);
+      // Without your past decisions as examples, even when you have turned them on: these very jobs would be
+      // among them. The learning suite is the fair test of the examples.
       const scorer = createScorer({ cv, prefs, model, examples: () => store.listClaudeScored(), meter });
       const output = await runDecisionsEval({ cases, scorer, concurrency: ollamaModel(model) ? 1 : 3, log: opts.log });
       return toResult(suite, scorer.model ?? model ?? 'claude-sonnet-5-5', output, cost());
@@ -112,7 +160,7 @@ async function main() {
   if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { model: { type: 'string' }, limit: { type: 'string' }, 'rules-only': { type: 'boolean' }, 'no-advisor': { type: 'boolean' }, all: { type: 'boolean' }, quiet: { type: 'boolean' }, help: { type: 'boolean' } },
+    options: { model: { type: 'string' }, limit: { type: 'string' }, 'rules-only': { type: 'boolean' }, 'no-advisor': { type: 'boolean' }, 'with-advisor': { type: 'boolean' }, all: { type: 'boolean' }, examples: { type: 'string' }, quiet: { type: 'boolean' }, help: { type: 'boolean' } },
   });
   const which = positionals[0];
   if (!which || values.help) return console.log(HELP);
@@ -121,13 +169,16 @@ async function main() {
   const limit = values.limit ? Number(values.limit) : undefined;
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new ConfigError('--limit must be a whole number, 1 or more');
 
+  const examples = values.examples ? Number(values.examples) : undefined;
+  if (examples !== undefined && (!Number.isInteger(examples) || examples < 3 || examples > 50)) throw new ConfigError('--examples must be a whole number from 3 to 50');
+
   const paths = resolvePaths(root);
   const suites = which === 'all' ? FIXED_SUITES : [which as SuiteName];
   let ran = 0;
   let saved = 0;
   for (const suite of suites) {
     try {
-      const result = await runSuite(suite, { model: values.model, limit, rulesOnly: Boolean(values['rules-only']), noAdvisor: Boolean(values['no-advisor']), all: Boolean(values.all), log: values.quiet ? undefined : (line) => console.error(line) });
+      const result = await runSuite(suite, { model: values.model, limit, rulesOnly: Boolean(values['rules-only']), noAdvisor: Boolean(values['no-advisor']), withAdvisor: Boolean(values['with-advisor']), all: Boolean(values.all), examples, log: values.quiet ? undefined : (line) => console.error(line) });
       // A --limit run is a quick look, not the suite: it is shown, and kept out of the saved results.
       const file = limit ? null : saveEvalResult(paths.evalsDir, result);
       console.log(`\n${formatEvalResult(result)}\n\n${file ? `Saved to ${file}` : 'Not saved: this was a --limit run.'}\n`);

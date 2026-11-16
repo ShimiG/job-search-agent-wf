@@ -62,6 +62,12 @@ export const PreferencesSchema = z.object({
       concurrency: z.number().int().min(1).max(10).default(3),
       maxAttempts: z.number().int().min(1).default(3),
       /**
+       * Show the scorer this many of the jobs you last picked, and as many you passed on from your
+       * shortlist, as examples of your taste. 0 = off. Whether it helps your search is measured by
+       * "npm run eval -- learning".
+       */
+      decisionExamples: z.number().int().min(0).max(50).default(0),
+      /**
        * Batch scoring (run --batch) costs half as much, and its scores arrive later, usually within
        * the hour. A run waits this long for them; after that the next run collects them. 0 = don't wait.
        */
@@ -74,7 +80,7 @@ export const PreferencesSchema = z.object({
       /** The same for batch runs. A consultation costs half there, so the range can be wider for about the same spend. */
       batchAdvisorBand: scoreBand.default([40, 90]),
     })
-    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3, batchWaitMinutes: 60, advisorBand: [50, 80], batchAdvisorBand: [40, 90] }),
+    .default({ threshold: 65, maxJobsPerRun: 40, concurrency: 3, maxAttempts: 3, decisionExamples: 0, batchWaitMinutes: 60, advisorBand: [50, 80], batchAdvisorBand: [40, 90] }),
   /**
    * For shortlisted alert-email jobs (title, company and location only): search the web for the full
    * posting on the company's own site, then score it again. About 6-8 cents per lookup.

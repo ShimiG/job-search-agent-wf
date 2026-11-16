@@ -1,3 +1,4 @@
+import { examplesFor } from '../pipeline/past-decisions.ts';
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -697,6 +698,7 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
           model: process.env.SCOUT_MODEL,
           examples: () => withStore((store) => store.listClaudeScored()),
           meter,
+          decisions: withStore((store) => examplesFor(store, prefs)),
         });
         return { scored: await scorer.score(full), scorer };
       });
@@ -738,7 +740,7 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
         {
           store,
           prefs,
-          scorer: createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => store.listClaudeScored(), meter }),
+          scorer: createScorer({ cv: withCertificates(loadJsonFile(paths.masterCv, MasterCvSchema), paths.certificatesDir), prefs, model: process.env.SCOUT_MODEL, examples: () => store.listClaudeScored(), meter, decisions: examplesFor(store, prefs) }),
           readPage: (link) => postingFromLink(link, null, { model, browserPath: settings?.browserPath, meter }),
           readPasted: (text, link) => pastedPosting(text, link, { model, meter }),
         },

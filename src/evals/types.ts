@@ -51,6 +51,9 @@ export interface EvalResult extends EvalSummary {
   results: CaseResult[];
 }
 
+/** Suites that run over your own jobs rather than the fictional cases: their cases are never listed in a report. */
+export const OWN_JOBS: readonly string[] = ['decisions', 'learning'];
+
 export const count = (n: number, of: number): Count => ({ n, of, rate: of > 0 ? n / of : null });
 
 /** Reads a .jsonl dataset: one JSON object per line; blank lines and lines starting with // are skipped. */
@@ -87,7 +90,7 @@ export function loadEvalSummaries(dir: string): EvalSummary[] {
       const { results, ...summary } = JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as EvalResult;
       if (!summary.suite || !Array.isArray(summary.metrics)) continue;
       // The fixed suites' cases are fictional and can be named. A suite over your own jobs keeps its cases to itself.
-      const misses = summary.suite === 'decisions' ? [] : (results ?? []).filter((r) => !r.pass && !r.error).map((r) => ({ id: r.id, expected: r.expected, got: r.got }));
+      const misses = OWN_JOBS.includes(summary.suite) ? [] : (results ?? []).filter((r) => !r.pass && !r.error).map((r) => ({ id: r.id, expected: r.expected, got: r.got }));
       out.push({ ...summary, misses });
     } catch {
       // A file that isn't a result is not this report's business.
