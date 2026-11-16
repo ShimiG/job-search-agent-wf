@@ -310,17 +310,20 @@ One document with everything counted from your database:
 - **Funnel:** found, passed the rules, scored, shortlisted, picked, tailored, approved, sent, each with
   its share of the stage before; per source; and why jobs were filtered out.
 - **Scoring against your own decisions:** the median score of jobs you picked and of jobs you dismissed,
-  the chance a pick outscored a dismissal (AUC: 50% is a coin flip), how many shortlisted jobs you
-  picked, how many picks came from below the cutoff, how often the advisor was consulted. No model is
-  asked: your picks are the answer key.
+  the chance a pick outscored a dismissal (AUC: 50% is a coin flip), the same among shortlisted jobs
+  only (the stricter number: dismissing a job shown as a poor fit mostly repeats the score), what each
+  cutoff from 45 to 75 would have kept, how many picks came from below the cutoff, how often the advisor
+  was consulted. No model is asked: your picks are the answer key.
 - **Tailoring:** bullets written, kept in your exact words, reworded; rewordings taken back by the rule
   checks and by the fact-check; letters rewritten; claims left for you; keyword coverage; page fit; PDF
   text; wording.
-- **Sending and replies:** attempts by mode and by application system, who answered each form field,
+- **Sending and replies:** attempts by mode and by application system, why an attempt ended without
+  sending, who answered each form field,
   replies by kind, days to a first answer and to a rejection, callbacks by source, score and method.
 - **Cost:** by purpose, model and week; what prompt caching and batch scoring saved; the cost of a
   scored job, a tailored CV, a filled form, an application and a callback; what the local model handled.
-- **Reliability:** failed calls, median and 95th-percentile call times, runs that didn't finish.
+- **Reliability:** failed calls to Claude and to the local model, why they failed, median and
+  95th-percentile call times, runs that didn't finish.
 - **Evals:** the latest result of each suite you ran (below).
 
 It names no company, job or person: a company's own application site is "Other sites", and filter

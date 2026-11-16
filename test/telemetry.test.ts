@@ -91,11 +91,15 @@ describe('a local model call through Ollama', () => {
       throw new Error('ECONNREFUSED');
     }) as typeof fetch;
     await assert.rejects(ollamaJson({ model: 'gemma3:12b', system: 's', user: 'u', schema: Schema, meter, purpose: 'reply' }), /isn't reachable/);
+    // A model that answers with the wrong shape: the reason names the field, not a page of JSON.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ message: { content: '{"kind":7}' }, prompt_eval_count: 700, eval_count: 5 }))) as typeof fetch;
+    await assert.rejects(ollamaJson({ model: 'gemma3:12b', system: 's', user: 'u', schema: Schema, meter, purpose: 'reply' }));
     const rows = store.usageRows();
-    // The unusable answer still used the model: its tokens are counted, then the failure is noted.
-    assert.deepEqual(rows.map((r) => [r.inputTokens, r.error === null]), [[800, true], [0, false], [0, false]]);
-    assert.match(rows[1]!.error!, /something other than JSON/);
-    assert.match(rows[2]!.error!, /isn't reachable/);
+    // One row per call. The unusable answers still used the model, so their tokens are kept.
+    assert.deepEqual(rows.map((r) => [r.inputTokens, r.error === null]), [[800, false], [0, false], [700, false]]);
+    assert.match(rows[0]!.error!, /something other than JSON/);
+    assert.match(rows[1]!.error!, /isn't reachable/);
+    assert.match(rows[2]!.error!, /^answer didn't match the expected shape: kind: /);
   });
 });
 

@@ -41,6 +41,8 @@ export interface EvalSummary {
   /** Dollars spent on the run; 0 for a local model or a rules-only suite. */
   cost: number;
   metrics: EvalMetric[];
+  /** The cases that came out wrong, when read back for a report. The cases are fictional, so they can be named. */
+  misses?: Array<{ id: string; expected: string; got: string }>;
 }
 
 export interface EvalResult extends EvalSummary {
@@ -80,8 +82,10 @@ export function loadEvalSummaries(dir: string): EvalSummary[] {
   const out: EvalSummary[] = [];
   for (const name of readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
     try {
-      const { results: _results, ...summary } = JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as EvalResult;
-      if (summary.suite && Array.isArray(summary.metrics)) out.push(summary);
+      const { results, ...summary } = JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as EvalResult;
+      if (!summary.suite || !Array.isArray(summary.metrics)) continue;
+      const misses = (results ?? []).filter((r) => !r.pass && !r.error).map((r) => ({ id: r.id, expected: r.expected, got: r.got }));
+      out.push({ ...summary, misses });
     } catch {
       // A file that isn't a result is not this report's business.
     }

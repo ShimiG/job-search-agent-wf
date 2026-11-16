@@ -42,6 +42,8 @@ export async function ollamaJson<S extends z.ZodType>(opts: {
   const elapsed = () => Math.round(performance.now() - started);
   const name = `ollama:${opts.model}`;
   const purpose = opts.purpose ?? 'score';
+  // Set once the model has answered: an answer that turns out unusable still used these tokens.
+  let tokens: { inputTokens: number; outputTokens: number } | undefined;
   try {
     const res = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: 'POST',
@@ -67,8 +69,7 @@ export async function ollamaJson<S extends z.ZodType>(opts: {
     });
     if (!res.ok) throw new Error(`Ollama: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
     const body = (await res.json()) as { message?: { content?: string }; done_reason?: string; prompt_eval_count?: number; eval_count?: number };
-    // Counted even when the answer turns out unusable: the model did the work.
-    opts.meter?.recordLocal(purpose, name, { inputTokens: body.prompt_eval_count ?? 0, outputTokens: body.eval_count ?? 0, durationMs: elapsed() }, opts.jobId);
+    tokens = { inputTokens: body.prompt_eval_count ?? 0, outputTokens: body.eval_count ?? 0 };
     if (body.done_reason === 'length') throw new Error('Ollama ran out of room for its answer');
     let parsed: unknown;
     try {
@@ -76,9 +77,12 @@ export async function ollamaJson<S extends z.ZodType>(opts: {
     } catch {
       throw new Error('Ollama returned something other than JSON');
     }
-    return opts.schema.parse(parsed);
+    const answer = opts.schema.parse(parsed);
+    opts.meter?.recordLocal(purpose, name, { ...tokens, durationMs: elapsed() }, opts.jobId);
+    return answer;
   } catch (err) {
-    opts.meter?.fail(purpose, name, err, elapsed(), opts.jobId);
+    // One row per call: a failed one, with the tokens it used if the model got as far as answering.
+    opts.meter?.fail(purpose, name, err, elapsed(), opts.jobId, tokens);
     throw err;
   }
 }

@@ -51,6 +51,14 @@ export interface ScoringMetrics {
     medianDismissed: number | null;
     /** The chance that a job you picked scored higher than one you dismissed: 0.5 is a coin flip, 1 is perfect. */
     auc: number | null;
+    /**
+     * The same, among shortlisted jobs only. The stricter number: a job below the cutoff was shown to you
+     * as a poor fit, so dismissing it mostly repeats the score rather than testing it.
+     */
+    aucShortlisted: number | null;
+    shortlisted: { picked: number; dismissed: number };
+    /** What each cutoff would have put on your shortlist, of the jobs you decided on. */
+    cutoffs: Array<{ cutoff: number; picked: Count; dismissed: Count }>;
     /** Of the shortlisted jobs you decided on, how many you picked. */
     shortlistPrecision: Count;
     /** Jobs you picked although they scored under the cutoff, out of all you picked. */
@@ -85,6 +93,8 @@ export interface TailorMetrics {
   /** Versions with at least one claim neither check could settle, left for you to approve or not. */
   needingReview: Count;
   unresolvedClaims: number;
+  /** Where the claims left for you were, and which check raised them. */
+  unresolvedBy: Array<{ label: string; claims: number }>;
   keywords: { cvs: number; matched: Count; required: Count } | null;
   onePage: Count;
   trimmedToFit: Count;
@@ -99,6 +109,8 @@ export interface SubmitterMetrics {
   jobs: number;
   byMode: Array<{ mode: string; attempts: number; submitted: number; prepared: number; needsYou: number; failed: number }>;
   byAts: Array<{ ats: string; attempts: number; submitted: number }>;
+  /** Why an attempt ended without the application being sent. */
+  stopped: Array<{ reason: string; attempts: number }>;
   /** From each job's latest attempt: who answered each form field. */
   fields: { total: number; bySource: Array<{ source: string; fields: number }>; modelShare: Count; rejectedByPage: Count } | null;
 }
@@ -134,11 +146,16 @@ export interface CostMetrics {
   perApplication: number | null;
   perCallback: number | null;
   /** Calls a local model handled: nothing spent, nothing sent out. */
-  local: { calls: number; inputTokens: number; outputTokens: number; hours: number };
+  local: { calls: number; inputTokens: number; outputTokens: number; minutes: number };
 }
 
 export interface ReliabilityMetrics {
+  /** Failed calls, of all calls. */
   calls: Count;
+  claude: Count;
+  local: Count;
+  /** Why calls failed, grouped. */
+  failures: Array<{ reason: string; calls: number }>;
   byPurpose: Array<{ label: string; calls: number; failed: number; p50Ms: number | null; p95Ms: number | null }>;
   runs: Array<{ agent: string; runs: number; unfinished: number; medianMinutes: number | null }>;
   sourceFetches: Count | null;
@@ -232,12 +249,42 @@ export function atsOf(url: string | null): string {
   }
 }
 
+const FAILURE_REASONS: Array<[RegExp, string]> = [
+  [/took longer than|timed? ?out|ETIMEDOUT|aborted/i, 'Timed out'],
+  [/isn't reachable|ECONNREFUSED|ECONNRESET|fetch failed|network|socket/i, "Couldn't reach the model"],
+  [/other than JSON/i, 'The answer was not JSON'],
+  [/ran out of room|max_tokens|cut off/i, 'The answer was cut off'],
+  [/expected shape|^\[$|ZodError/i, "The answer didn't have the expected shape"],
+  [/overloaded|rate.?limit|\b429\b|\b529\b/i, 'Overloaded or rate-limited'],
+  [/HTTP 5\d\d|\b5\d\d\b|internal server/i, 'Server error'],
+  [/declined|refus/i, 'The model declined'],
+];
+/** A failed call's reason as a group: the stored message can carry a request ID or a path, the group can't. */
+export const failureReason = (error: string | null) => FAILURE_REASONS.find(([re]) => re.test(error ?? ''))?.[1] ?? 'Other';
+
+const STOP_REASONS: Array<[RegExp, string]> = [
+  [/asks you to sign in/, 'The site wanted a sign-in or an account'],
+  [/no application form found/, 'No application form at the address'],
+  [/doesn't mention/, "The page didn't mention the job"],
+  [/already applied to/, 'Your per-company limit was reached'],
+  [/no tailored documents|no CV PDF/, 'Documents were missing'],
+  [/CAPTCHA appeared after/, 'A CAPTCHA appeared after Submit'],
+  [/no confirmation seen/, 'No confirmation seen (window closed or timed out)'],
+  [/error after clicking Submit/, 'An error after clicking Submit'],
+  [/no submit button/, 'No submit button found'],
+  [/Finish with: run --mode assist/, 'Auto mode stopped for you (a question, a CAPTCHA, a model-written answer)'],
+  [/^[^:]{2,40}: .*Apply at /, "A site it doesn't automate (LinkedIn, Indeed...)"],
+];
+/** Why a Submitter attempt stopped, as a group: the stored reason names the job's address. */
+export const stopReason = (reason: string | null) => STOP_REASONS.find(([re]) => re.test(reason ?? ''))?.[1] ?? 'Other';
+
 const tally = <T>(items: T[], key: (x: T) => string): Array<[string, number]> => {
   const m = new Map<string, number>();
   for (const x of items) m.set(key(x), (m.get(key(x)) ?? 0) + 1);
   return [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 };
 
+const CUTOFFS = [45, 50, 55, 60, 65, 70, 75];
 const SCORE_BANDS = ['Strong (85+)', 'Good (70–84)', 'Stretch (50–69)', 'Poor (under 50)'];
 
 // ---------------------------------------------------------------- the report
@@ -256,6 +303,8 @@ export function caseStudy(store: JobStore, now = new Date()): CaseStudy {
 
   // What Scout found: not the records made from your own application emails, nor jobs you pasted in.
   const isFound = (j: JobSummary) => origin(j) !== 'applied' && j.source !== 'manual';
+  // A job that was scored got past the rules then, even if a later change of rules filtered it out.
+  const passed = (j: JobSummary) => j.score !== null || (!everFiltered.has(j.id) && !everDuplicate.has(j.id));
   const found = jobs.filter(isFound);
   const outcomes = outcomeReport(store, now);
   const spending = spendingReport(store, now);
@@ -266,7 +315,7 @@ export function caseStudy(store: JobStore, now = new Date()): CaseStudy {
     return {
       label,
       found: mine.length,
-      passedFilters: mine.filter((j) => !everFiltered.has(j.id) && !everDuplicate.has(j.id)).length,
+      passedFilters: mine.filter(passed).length,
       scored: scores.length,
       shortlisted: mine.filter((j) => everShortlisted.has(j.id)).length,
       picked: mine.filter((j) => everPicked.has(j.id)).length,
@@ -293,8 +342,8 @@ export function caseStudy(store: JobStore, now = new Date()): CaseStudy {
     funnel: {
       found: found.length,
       addedByYou: jobs.filter((j) => j.source === 'manual').length,
-      filteredOut: found.filter((j) => everFiltered.has(j.id)).length,
-      duplicates: found.filter((j) => everDuplicate.has(j.id)).length,
+      filteredOut: found.filter((j) => !passed(j) && everFiltered.has(j.id)).length,
+      duplicates: found.filter((j) => !passed(j) && !everFiltered.has(j.id)).length,
       scored: jobs.filter((j) => j.score !== null).length,
       shortlisted: everShortlisted.size,
       picked: everPicked.size,
@@ -327,8 +376,11 @@ function scoringMetrics(
   const yes = scored.filter((j) => sets.everPicked.has(j.id) || sets.everSubmitted.has(j.id));
   const no = scored.filter((j) => sets.everDismissed.has(j.id) && !sets.everPicked.has(j.id) && !sets.everSubmitted.has(j.id));
   const decided = new Set([...yes, ...no].map((j) => j.id));
-  const shortlistedYes = yes.filter((j) => sets.everShortlisted.has(j.id)).length;
-  const shortlistedNo = no.filter((j) => sets.everShortlisted.has(j.id)).length;
+  const listedYes = yes.filter((j) => sets.everShortlisted.has(j.id));
+  const listedNo = no.filter((j) => sets.everShortlisted.has(j.id));
+  const shortlistedYes = listedYes.length;
+  const shortlistedNo = listedNo.length;
+  const scores = (rows: JobSummary[]) => rows.map((j) => j.score!);
 
   // An advisor is named in the scorer's name: "claude-haiku-5-5+advisor:claude-opus-5-5".
   const advisors = new Set(scored.map((j) => /\+advisor:(.+)$/.exec(j.scoredBy ?? '')?.[1]).filter((m): m is string => Boolean(m)));
@@ -346,7 +398,10 @@ function scoringMetrics(
       dismissed: no.length,
       medianPicked: median(yes.map((j) => j.score!)),
       medianDismissed: median(no.map((j) => j.score!)),
-      auc: auc(yes.map((j) => j.score!), no.map((j) => j.score!)),
+      auc: auc(scores(yes), scores(no)),
+      aucShortlisted: auc(scores(listedYes), scores(listedNo)),
+      shortlisted: { picked: shortlistedYes, dismissed: shortlistedNo },
+      cutoffs: yes.length + no.length ? CUTOFFS.map((cutoff) => ({ cutoff, picked: count(yes.filter((j) => j.score! >= cutoff).length, yes.length), dismissed: count(no.filter((j) => j.score! >= cutoff).length, no.length) })) : [],
       shortlistPrecision: count(shortlistedYes, shortlistedYes + shortlistedNo),
       pickedBelowCutoff: count(yes.length - shortlistedYes, yes.length),
       undecided: scored.filter((j) => sets.everShortlisted.has(j.id) && !decided.has(j.id)).length,
@@ -364,6 +419,7 @@ function tailorMetrics(store: JobStore): TailorMetrics {
   const bullets = { total: 0, verbatim: 0, reworded: 0, revertedByRules: 0, revertedByFactCheck: 0 };
   let otherRuleFixes = 0;
   let unresolvedClaims = 0;
+  const unresolved: string[] = [];
   const kw = { cvs: 0, matched: 0, total: 0, required: 0, requiredTotal: 0 };
   for (const a of written) {
     const r = reportOf(a);
@@ -374,7 +430,11 @@ function tailorMetrics(store: JobStore): TailorMetrics {
     bullets.reworded += kept;
     bullets.verbatim += printed - kept;
     for (const i of r.issues) {
-      if (i.severity === 'unresolved') unresolvedClaims++;
+      if (i.severity === 'unresolved') {
+        unresolvedClaims++;
+        const place = i.where.startsWith('letter') ? 'Cover letter' : i.where.startsWith('bullet') ? 'CV bullet' : 'Summary or headline';
+        unresolved.push(`${place}, raised by the ${i.message.startsWith('fact-check') ? 'fact-checker' : 'rule checks (a name or number in neither your CV nor the posting)'}`);
+      }
       if (i.severity !== 'fixed') continue;
       const reverted = /reverted to your wording/.test(i.message);
       if (reverted && i.message.startsWith('fact-check:')) bullets.revertedByFactCheck++;
@@ -409,6 +469,7 @@ function tailorMetrics(store: JobStore): TailorMetrics {
     lettersRevised: count(written.filter((a) => reportOf(a).revised).length, written.length),
     needingReview: count(written.filter((a) => !reportOf(a).ok).length, written.length),
     unresolvedClaims,
+    unresolvedBy: tally(unresolved, (x) => x).map(([label, claims]) => ({ label, claims })),
     keywords: kw.cvs ? { cvs: kw.cvs, matched: count(kw.matched, kw.total), required: count(kw.required, kw.requiredTotal) } : null,
     onePage: count(rendered.filter((a) => reportOf(a).cvPages === 1).length, rendered.length),
     trimmedToFit: count(rendered.filter((a) => reportOf(a).issues.some((i) => i.where === 'layout' && i.message.startsWith('trimmed'))).length, rendered.length),
@@ -442,6 +503,7 @@ function submitterMetrics(store: JobStore): SubmitterMetrics {
       const rows = attempts.filter((s) => atsOf(s.applyUrl) === ats);
       return { ats, attempts: rows.length, submitted: rows.filter((s) => s.outcome === 'submitted').length };
     }),
+    stopped: tally(attempts.filter((s) => s.outcome === 'needs_manual' || s.outcome === 'failed'), (s) => (s.outcome === 'failed' ? 'It failed with an error' : stopReason(s.reason))).map(([reason, n]) => ({ reason, attempts: n })),
     fields: fields.length
       ? {
           total: fields.length,
@@ -547,7 +609,7 @@ function costMetrics(store: JobStore, usage: UsageEntry[], spending: ReturnType<
       calls: local.length,
       inputTokens: sum(local, (u) => u.inputTokens),
       outputTokens: sum(local, (u) => u.outputTokens),
-      hours: sum(local, (u) => u.durationMs ?? 0) / 3_600_000,
+      minutes: sum(local, (u) => u.durationMs ?? 0) / 60_000,
     },
   };
 }
@@ -560,6 +622,9 @@ function reliabilityMetrics(store: JobStore, usage: UsageEntry[]): ReliabilityMe
   const failed = scout.reduce((n, r) => n + num((r.stats!.sources as { failed?: number } | undefined)?.failed), 0);
   return {
     calls: count(usage.filter((u) => u.error !== null).length, usage.length),
+    claude: count(usage.filter((u) => u.error !== null && !isLocalModel(u.model)).length, usage.filter((u) => !isLocalModel(u.model)).length),
+    local: count(usage.filter((u) => u.error !== null && isLocalModel(u.model)).length, usage.filter((u) => isLocalModel(u.model)).length),
+    failures: tally(usage.filter((u) => u.error !== null), (u) => `${isLocalModel(u.model) ? 'Local model' : 'Claude'}: ${failureReason(u.error)}`).map(([reason, calls]) => ({ reason, calls })),
     byPurpose: tally(usage, (u) => u.purpose).map(([purpose]) => {
       const rows = usage.filter((u) => u.purpose === purpose);
       const times = rows.filter((u) => u.error === null && u.durationMs !== null).map((u) => u.durationMs!);
