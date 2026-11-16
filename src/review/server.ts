@@ -26,6 +26,7 @@ import { placeByScore, resortByCutoff } from '../pipeline/run.ts';
 import { spendingReport } from '../pipeline/spending.ts';
 import { saveShortlistCutoff, shortlistCutoff } from '../settings.ts';
 import { ARCHIVE_AFTER_DAYS, buildReport, groupApplications, isArchived, STAGES } from '../archiver/report.ts';
+import { manualOnly } from '../submit/manual.ts';
 import { markSubmitted } from '../submit/run.ts';
 import { MODEL_SOURCES, SubmitFileSchema, type PlannedAnswer, type SubmitMode } from '../submit/schema.ts';
 import { TailorConfigSchema, type VerificationReport } from '../tailor/schema.ts';
@@ -217,6 +218,13 @@ async function refreshTasks() {
 
 // ---------------------------------------------------------------- what the page shows
 
+/** Only while it's still to be sent: a job already applied to has nothing left to route. */
+function manualSite(j: JobRow): { site: string; why: string } | null {
+  if (!['tailored', 'approved', 'needs_manual'].includes(j.status)) return null;
+  const m = manualOnly(j);
+  return m && { site: m.site, why: m.why };
+}
+
 const view = (j: JobRow) => ({
   id: j.id,
   score: j.score,
@@ -238,6 +246,8 @@ const view = (j: JobRow) => ({
   gaps: j.scoreDetails?.gaps ?? [],
   dealbreakers: j.scoreDetails?.dealbreakers ?? [],
   description: j.descriptionIsPartial ? '' : j.description.slice(0, 6000),
+  // The application is on a site the Submitter never acts on: you apply there yourself.
+  manualOnly: manualSite(j),
 });
 
 function documents(store: JobStore, j: JobRow) {
@@ -579,9 +589,9 @@ const actions: Record<string, (body: unknown) => Promise<unknown>> = {
       await langgraph(`/threads/${pipeline.threadId}/runs`, { assistant_id: 'pipeline', command: { resume: { approve: ids, reject: [], force, mode } } });
       return { via: 'pipeline', approved: ids, mode };
     }
-    const { approved, skipped } = withStore((store) => applyReview(store, { approve: ids, force }));
+    const { approved, manual, skipped } = withStore((store) => applyReview(store, { approve: ids, force }));
     if (approved.length) await start('submit', up, approved, { jobIds: approved, mode }, () => submitAgent(approved, mode));
-    return { via: up ? 'langgraph' : 'local', approved, skipped, mode };
+    return { via: up ? 'langgraph' : 'local', approved, manual, skipped, mode };
   },
 
   async reject(body) {

@@ -376,7 +376,7 @@ npm run review               # http://127.0.0.1:4100
 | **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. **I applied myself** on a card records a job you applied to on your own: it moves to Applied, and other listings of the same job are removed. |
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
-| **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
+| **Sending** | The Submitter at work, and jobs you apply to yourself because they are on a site it doesn't apply on. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Applied** | Every application in play, sent by the Submitter or by you: its stage (read from your email by the Archiver, or set by you), replies, things you're asked to do, its CV and cover letter, and every answer Claude wrote on the form. **Check email now** runs the Archiver. An application moves to **Settings → Archive** 30 days after you applied (whatever its stage), when you set its stage to Rejected yourself, or with **Send to archive**. A rejection read from email alone doesn't move it. |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. Cards have the same **I applied myself**. |
 | **Stats** | How your applications are doing: replies, interviews, applications per week, how many were sent with this tool and how many by you, callback rates by source and by score, and what Claude has cost. |
@@ -613,7 +613,11 @@ application, at most 90 days):
    application mail, or a job board you apply through (Drushim, JobMaster, AllJobs, ZipRecruiter).
    The boards' job alerts ("הסוכן החכם", "משרות חדשות"…) are still skipped. The first run after a board
    is added goes back once over its mail from the last 90 days.
-2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
+2. **Sorting.** A receipt that says nothing more than that your application arrived is recognised
+   without a model, as are LinkedIn's and Indeed's own "your application was sent" notices. "Thanks
+   for applying" opens rejections and invitations as often as receipts, so an email that goes on to
+   mention a decision, a request or a next step (unfortunately, filled, interview, assignment, offer,
+   on hold…, in English or Hebrew) is read by the model like the rest. Everything else
    goes to the local model, which answers: confirmation, viewed, rejection, assessment, interview,
    offer, update, or not about an application. It also gives the company, the role, a one-line summary,
    and anything you're asked to do ("pick a slot by Thursday").
@@ -632,7 +636,21 @@ application, at most 90 days):
    furthest stage ("Rejected after interview"), replies and to-dos.
 
 Every email it reads is recorded in `responses`, so none is read twice. If Ollama is down, the run stops
-and that email is read on the next run. **Check email now** on the Applied tab runs it right away.
+and that email is read on the next run. If Ollama doesn't answer within two minutes it is stuck, so the
+run stops there too, and the email is tried again on later runs (up to 8, since the delay isn't the
+email's doing; an answer that can't be used gets 3). **Check email now** on the Applied tab runs it
+right away.
+
+To go back over mail already passed:
+
+```bash
+npm run archive -- --recheck 30
+```
+
+It looks again at the last 30 days: emails nothing was recorded for are read, and confirmations that
+the rules filed without the model are read again by today's rules. One that turns out to be a
+rejection, an assessment, an interview, an offer or an update is corrected in place, under the same
+application. Nothing already read by the model is touched, and it can be run as often as you like.
 
 ### Tailor
 
@@ -730,6 +748,13 @@ always stops and hands the job to you when:
 - **Solve CAPTCHAs or use stealth tricks.**
 - **Create accounts or sign in.** Workday, iCIMS, Taleo and SuccessFactors are handed to you.
 - **Apply on LinkedIn, Indeed or Israeli job boards**: their terms forbid it.
+
+A job whose application is on one of those sites is never attempted. Ready to send marks it
+**Apply yourself: LinkedIn** (or Workday, Indeed…), and when you approve it, it goes straight to
+**Sending** as "needs you", with **Apply via the alert link**, **Find the company's application page**
+and **I applied myself**. No attempt is made or recorded, the Submitter isn't started for it, and later
+runs leave it alone. If the company's own application page is found for it, the Submitter takes it from
+there like any other job.
 - **Apply twice,** or more than `maxPerCompanyPer30Days` (default 2) times to one company in 30 days.
 
 Screenshots of every attempt go to `submission/` in the job's application folder. The browser uses its
@@ -770,7 +795,7 @@ npm run scout -- watch [--cron "0 8 * * *"]
 npm run scout -- compare-scorers [--limit 40]
 
 # Archiver
-npm run archive
+npm run archive [-- --recheck <days>]
 
 # Evals
 npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--quiet]

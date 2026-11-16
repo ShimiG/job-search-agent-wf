@@ -90,20 +90,51 @@ ${truncate(body.replace(/\n{3,}/g, '\n\n').trim(), 4_000)}
 </email>`;
 }
 
-export async function classifyEmail(mail: RawEmail, body: string, model: string, meter?: CostMeter): Promise<Classified> {
-  // LinkedIn's and most ATSs' confirmations follow fixed wordings: no need to ask the model.
+/**
+ * Words that mean an email says more than "we received your application": a decision, a request, a
+ * next step. "Thanks for applying" opens rejections and invitations as often as confirmations, so an
+ * email with any of these is read by the model, never filed as a confirmation by rule.
+ */
+const SAYS_MORE =
+  /unfortunately|regret|sorry to|not (?:be )?(?:moving|proceeding|progressing|selected|successful)|won(?:'|’)t be|will not be|unable to (?:offer|move|proceed)|no longer|(?:been|was|is) (?:filled|closed|cancell?ed)|closing (?:the|your|all)|other candidates|another candidate|decided|interview|schedul|book a|calendly|a (?:call|chat|conversation)|(?:speak|talk|meet) (?:with|to) you|availab|assignment|assessment|home ?(?:task|work|test)|questionnaire|\btests?\b|challenge|exercise|\boffer|next (?:step|stage|round)|pleased|delighted|happy to (?:inform|invite|let you)|congratulat|invit|on hold|paused|postponed|please (?:send|provide|complete|fill|reply|confirm|share|attach|answer)|we need|could you|can you|additional (?:information|details|documents)|לצערנו|מצטערים|לא נמשיך|לא להתקדם|אוישה|נסגרה|ראיון|זימון|שיחה|מטלה|מבחן|שאלון|הצעת עבודה|שמחים לבשר|נשמח לקבוע|נבקש|אנא שלח/i;
+
+/**
+ * The answer without the model, for mail whose meaning is fixed by its wording: LinkedIn's and Indeed's
+ * "your application was sent" notices, and a company's or ATS's receipt that says nothing more than
+ * that it arrived. Null when the email has to be read.
+ */
+export function rulesAnswer(mail: RawEmail, body: string): Classified | null {
   const applied = parseAppliedEmail(mail);
-  if (applied && !applied.rejected) {
-    const viewed = /application was viewed/i.test(mail.subject);
-    return {
-      kind: viewed ? 'viewed' : 'confirmation',
-      company: applied.company,
-      title: applied.title,
-      summary: viewed ? `${applied.company || 'The company'} viewed your application.` : `${applied.company || 'The company'} confirmed they received your application.`,
-      action: '',
-      model: 'rules',
-    };
-  }
-  const x = await ollamaJson({ model, system: INSTRUCTIONS, user: emailForModel(mail, body), schema: Schema, timeoutMs: 300_000, meter, purpose: 'reply' });
-  return { kind: x.kind, company: x.company.trim(), title: x.job_title.trim(), summary: x.summary.trim(), action: x.action.trim(), model: `ollama:${model}` };
+  if (!applied || applied.rejected) return null;
+  // LinkedIn and Indeed send these themselves, to a fixed form. Anyone else's "thanks for applying" may go on.
+  const fixedForm = applied.via === 'linkedin' || applied.via === 'indeed';
+  if (!fixedForm && SAYS_MORE.test(`${mail.subject}\n${body.slice(0, 4_000)}`)) return null;
+  const viewed = /application was viewed/i.test(mail.subject);
+  return {
+    kind: viewed ? 'viewed' : 'confirmation',
+    company: applied.company,
+    title: applied.title,
+    summary: viewed ? `${applied.company || 'The company'} viewed your application.` : `${applied.company || 'The company'} confirmed they received your application.`,
+    action: '',
+    model: 'rules',
+  };
+}
+
+/** A local model answers in seconds; past this, Ollama is stuck and the next email would wait as long. */
+export const REPLY_TIMEOUT_MS = 120_000;
+
+export async function classifyEmail(mail: RawEmail, body: string, model: string, meter?: CostMeter): Promise<Classified> {
+  const byRule = rulesAnswer(mail, body);
+  if (byRule) return byRule;
+  const x = await ollamaJson({ model, system: INSTRUCTIONS, user: emailForModel(mail, body), schema: Schema, timeoutMs: REPLY_TIMEOUT_MS, meter, purpose: 'reply' });
+  // What the wording gave for certain (LinkedIn's company name, a title in the subject) fills what the model left empty.
+  const applied = parseAppliedEmail(mail);
+  return {
+    kind: x.kind,
+    company: x.company.trim() || applied?.company || '',
+    title: x.job_title.trim() || applied?.title || '',
+    summary: x.summary.trim(),
+    action: x.action.trim(),
+    model: `ollama:${model}`,
+  };
 }

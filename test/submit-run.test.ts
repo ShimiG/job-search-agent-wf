@@ -289,8 +289,22 @@ describe('Submitter against local forms', { skip: !BROWSER && 'no Chromium avail
 
   it('hands LinkedIn and Workday jobs to you without opening them', async () => {
     const id = approvedJob('x', { applyUrl: 'https://www.linkedin.com/jobs/view/123/' });
-    await runSubmitter(deps(), 'auto');
-    assert.match(store.get(id)!.statusReason!, /LinkedIn forbids automated applications/);
+    const said: string[] = [];
+    const logger = { ...silentLogger, info: (m: string) => said.push(m), warn: (m: string) => said.push(m) };
+    const stats = await runSubmitter(deps({ logger }), 'auto');
+    assert.match(store.get(id)!.statusReason!, /^LinkedIn: LinkedIn forbids automated applications; apply on the site\. Apply at https:\/\/www\.linkedin\.com\/jobs\/view\/123\/, then click "I applied myself"/);
+    assert.equal(store.get(id)!.status, 'needs_manual');
+    // Nothing was tried, so nothing is recorded as an attempt.
+    assert.equal(stats.attempted, 0);
+    assert.deepEqual(store.submissions(id), []);
+    assert.ok(said.some((m) => m.includes("LinkedIn can't be applied to automatically. It waits for you in Sending.")));
+
+    // Later runs leave it alone, in any mode; asked for by number, it says why.
+    said.length = 0;
+    assert.equal((await runSubmitter(deps({ logger }), 'assist')).attempted, 0);
+    assert.equal((await runSubmitter(deps({ logger }), 'assist', { jobIds: [id] })).attempted, 0);
+    assert.deepEqual(store.submissions(id), []);
+    assert.ok(said.includes(`#${id}: skipped: LinkedIn: LinkedIn forbids automated applications; apply on the site`), said.join(' | '));
     markSubmitted(store, id, 'applied on LinkedIn');
     assert.equal(store.get(id)!.status, 'submitted');
     assert.throws(() => markSubmitted(store, id, null), /already marked/);

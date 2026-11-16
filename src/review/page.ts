@@ -657,7 +657,9 @@ export const PAGE = String.raw`<!doctype html>
         var ids = chosen.map(function (j) { return j.id; });
         post('approve', { ids: ids, force: force, mode: $('mode').value }).then(function (r) {
           ui.approve.clear(); ui.tab = 'sending';
-          toast('Approved ' + ids.length + '. ' + (r.mode === 'assist' ? 'A browser window opens with each form filled: check it and click Submit.' : r.mode === 'prepare' ? 'Prepare mode: forms are filled and screenshotted, nothing is submitted.' : 'Auto mode: forms are submitted when every answer is yours.'));
+          var yours = r.manual ? r.manual.length : 0;
+          if (yours && yours === ids.length) toast(yours === 1 ? 'Approved. This one is on a site the Submitter does not apply on: apply there, then click "I applied myself".' : 'Approved ' + yours + '. They are on sites the Submitter does not apply on: apply there, then click "I applied myself" on each.');
+          else toast('Approved ' + ids.length + '. ' + (yours ? yours + ' of them wait for you to apply yourself. ' : '') + (r.mode === 'assist' ? 'A browser window opens with each form filled: check it and click Submit.' : r.mode === 'prepare' ? 'Prepare mode: forms are filled and screenshotted, nothing is submitted.' : 'Auto mode: forms are submitted when every answer is yours.'));
         }, fail);
       });
       go.disabled = ui.busy;
@@ -734,6 +736,11 @@ export const PAGE = String.raw`<!doctype html>
         after.push(redoBox(j));
         after.push(linkBox(j, 'ready'));
         var tags = docTags(j);
+        if (j.manualOnly) {
+          var mo = el('span', 'tag', 'Apply yourself: ' + j.manualOnly.site);
+          mo.title = j.manualOnly.why + '. After you approve, this job waits in Sending for you to apply.';
+          tags.push(mo);
+        }
         if (j.docs && j.docs.unverified.length) tags.push(el('span', 'tag warn', j.docs.unverified.length + ' to check'));
         if (j.docs && j.docs.style) {
           var sn = j.docs.style.notes.length;
@@ -777,10 +784,12 @@ export const PAGE = String.raw`<!doctype html>
         } else {
           tags.unshift(el('span', 'tag ' + (j.status === 'failed' ? 'bad' : 'warn'), j.status === 'failed' ? 'failed' : 'needs you'));
           if (j.last) extra.push(el('p', 'note', time(j.last.at) + ' (' + j.last.mode + '): ' + (j.last.reason || j.last.outcome)));
+          // Handed to you at approval, with no attempt behind it: say why.
+          else if (j.manualOnly) extra.push(el('p', 'note', j.manualOnly.site + ': ' + j.manualOnly.why + '. Once you have applied, click "I applied myself".'));
           if (j.last && j.last.screenshot) extra.push(link(file(j, j.last.screenshot), 'tag', 'Screenshot of the form ↗'));
           var r = el('div', 'row');
           // LinkedIn and Indeed can't be applied to automatically; a copy site has no form.
-          var noForm = j.last && /LinkedIn|Indeed|no application form|doesn't mention/.test(j.last.reason || '');
+          var noForm = j.manualOnly || (j.last && /LinkedIn|Indeed|no application form|doesn't mention/.test(j.last.reason || ''));
           if (noForm) {
             r.appendChild(btn("Find the company's application page (~7¢)", 'small primary', function () {
               toast('Looking for the application page…');

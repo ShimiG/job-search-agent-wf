@@ -1,3 +1,4 @@
+import { cliErrorMessage } from '../util/cli-error.ts';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -209,6 +210,6 @@ async function main() {
 }
 
 main().catch((err: unknown) => {
-  console.error(err instanceof ConfigError ? err.message : err);
+  console.error(cliErrorMessage(err, 'npm run submit -- help') ?? err);
   process.exitCode = 1;
 });

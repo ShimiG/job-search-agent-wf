@@ -1,3 +1,4 @@
+import { manualOnly, parkManualOnly } from './manual.ts';
 import { withJob, type CostMeter } from '../llm/cost.ts';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -365,10 +366,21 @@ export async function runSubmitter(deps: SubmitDeps, mode: SubmitMode, opts: { j
   const jobs = (opts.jobIds?.length ? named : store.listByStatus(eligible))
     .filter((j): j is JobRow => Boolean(j && eligible.includes(j.status)))
     .filter((j) => !store.submissions(j.id).some((s) => s.outcome === 'submitted'))
+    // A job on a site the Submitter never acts on waits for you: no attempt is made, however often it runs.
+    .filter((j) => {
+      const manual = parkManualOnly(store, j);
+      if (manual && j.status === 'approved') logger.info(`#${j.id} ${j.company} — ${j.title}: ${manual.site} can't be applied to automatically. It waits for you in Sending.`);
+      return !manual;
+    })
     .slice(0, deps.cfg.maxPerRun);
   // Jobs asked for by id that won't run: say which and why, rather than a silent "nothing to submit".
   for (const j of named.filter((j) => !jobs.includes(j))) {
-    const why = store.submissions(j.id).some((s) => s.outcome === 'submitted') ? 'already submitted' : `"${j.status}", and ${mode} mode only takes ${eligible.join(' or ')}`;
+    const manual = manualOnly(j);
+    const why = store.submissions(j.id).some((s) => s.outcome === 'submitted')
+      ? 'already submitted'
+      : eligible.includes(j.status) && manual
+        ? `${manual.site}: ${manual.why}`
+        : `"${j.status}", and ${mode} mode only takes ${eligible.join(' or ')}`;
     logger.warn(`#${j.id}: skipped: ${why}`);
   }
   if (jobs.length === 0) {
