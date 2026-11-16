@@ -666,7 +666,9 @@ has read once is not read again, so each run picks up where the last one stopped
    show are preferred over ones that appear nowhere else on the page.
 2. **Rules.** Bullets must cite real highlight IDs, skills must be yours, every job in your history
    stays, and a reworded line that adds a number or a tool name your CV doesn't contain reverts to your
-   exact wording.
+   exact wording. A name counts as yours in any form your CV has it: "LLM" and "LLMs" are one
+   term, and "Claude-based" or "AWS-native" claim nothing a CV mentioning Claude or AWS doesn't, while
+   "Kubernetes-based" is still caught when Kubernetes appears nowhere.
 3. **Fact-check.** A second call checks every reworded claim and cover-letter paragraph against your CV.
    Unsupported bullets revert to your wording; flagged letter paragraphs get one rewrite and are checked
    again. Anything still unsupported is listed for you, and approving it needs an explicit "send anyway".
