@@ -613,7 +613,11 @@ application, at most 90 days):
    application mail, or a job board you apply through (Drushim, JobMaster, AllJobs, ZipRecruiter).
    The boards' job alerts ("הסוכן החכם", "משרות חדשות"…) are still skipped. The first run after a board
    is added goes back once over its mail from the last 90 days.
-2. **Sorting.** Confirmations follow fixed wordings and are recognised without a model. Everything else
+2. **Sorting.** A receipt that says nothing more than that your application arrived is recognised
+   without a model, as are LinkedIn's and Indeed's own "your application was sent" notices. "Thanks
+   for applying" opens rejections and invitations as often as receipts, so an email that goes on to
+   mention a decision, a request or a next step (unfortunately, filled, interview, assignment, offer,
+   on hold…, in English or Hebrew) is read by the model like the rest. Everything else
    goes to the local model, which answers: confirmation, viewed, rejection, assessment, interview,
    offer, update, or not about an application. It also gives the company, the role, a one-line summary,
    and anything you're asked to do ("pick a slot by Thursday").
@@ -632,7 +636,21 @@ application, at most 90 days):
    furthest stage ("Rejected after interview"), replies and to-dos.
 
 Every email it reads is recorded in `responses`, so none is read twice. If Ollama is down, the run stops
-and that email is read on the next run. **Check email now** on the Applied tab runs it right away.
+and that email is read on the next run. If Ollama doesn't answer within two minutes it is stuck, so the
+run stops there too, and the email is tried again on later runs (up to 8, since the delay isn't the
+email's doing; an answer that can't be used gets 3). **Check email now** on the Applied tab runs it
+right away.
+
+To go back over mail already passed:
+
+```bash
+npm run archive -- --recheck 30
+```
+
+It looks again at the last 30 days: emails nothing was recorded for are read, and confirmations that
+the rules filed without the model are read again by today's rules. One that turns out to be a
+rejection, an assessment, an interview, an offer or an update is corrected in place, under the same
+application. Nothing already read by the model is touched, and it can be run as often as you like.
 
 ### Tailor
 
@@ -770,7 +788,7 @@ npm run scout -- watch [--cron "0 8 * * *"]
 npm run scout -- compare-scorers [--limit 40]
 
 # Archiver
-npm run archive
+npm run archive [-- --recheck <days>]
 
 # Evals
 npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--quiet]

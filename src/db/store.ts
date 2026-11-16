@@ -927,6 +927,18 @@ export class JobStore {
     }));
   }
 
+  /** What was recorded for one email, whatever its kind; undefined if it was never read. */
+  responseReading(messageId: string): { id: number; kind: string; model: string } | undefined {
+    return this.db.prepare('SELECT id, kind, model FROM responses WHERE message_id = ?').get(messageId) as { id: number; kind: string; model: string } | undefined;
+  }
+
+  /** Replaces what an email was read as, after reading it again. The application it belongs to stays. */
+  updateResponseReading(id: number, r: Pick<ResponseRecord, 'kind' | 'company' | 'title' | 'summary' | 'action' | 'model'>): void {
+    this.db
+      .prepare('UPDATE responses SET kind = ?, company = ?, title = ?, summary = ?, action = ?, model = ? WHERE id = ?')
+      .run(r.kind, r.company, r.title, r.summary, r.action, r.model, id);
+  }
+
   setResponseJob(id: number, jobId: number | null): void {
     this.db.prepare('UPDATE responses SET job_id = ? WHERE id = ?').run(jobId, id);
   }

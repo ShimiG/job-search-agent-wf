@@ -26,7 +26,28 @@ export interface ArchiverStats {
   /** Applications you sent yourself, recorded from a reply because nothing else had recorded them. */
   recorded: number;
   failed: number;
+  /** With --recheck: confirmations read again by today's rules, and how many turned out to be something else. */
+  rechecked?: number;
+  corrected?: number;
 }
+
+/** An odd answer comes out the same every time, so three tries is plenty. */
+export const MAX_TRIES = 3;
+/** A timeout is the machine's doing, not the email's: it gets more runs before the email is given up on. */
+export const MAX_TIMEOUT_TRIES = 8;
+
+/**
+ * What a failed read means for the email and for the run. Ollama gone: stop, the email hasn't been
+ * tried. A timeout: Ollama is stuck, so the next email would wait as long; stop, and try this one
+ * again next run. Anything else is about this email: skip it for now and go on.
+ */
+export function afterFailure(message: string): 'stop' | 'timeout' | 'retry' {
+  if (/isn't reachable/.test(message)) return 'stop';
+  return /took longer than/.test(message) ? 'timeout' : 'retry';
+}
+
+/** Whether an email that failed again gets another run, after `tries` earlier ones. */
+export const triesLeft = (outcome: 'timeout' | 'retry', tries: number) => tries + 1 < (outcome === 'timeout' ? MAX_TIMEOUT_TRIES : MAX_TRIES);
 
 export interface ArchiverDeps {
   store: JobStore;
@@ -38,13 +59,15 @@ export interface ArchiverDeps {
   reportFile: string;
   /** How far back the first run reads, at most. */
   firstRunDays?: number;
+  /** Go back over this many days of mail: read what was never recorded, and read rule-sorted confirmations again. */
+  recheckDays?: number;
   /** Records the local model's calls (tokens and time; they cost nothing) with this run. */
   meter?: CostMeter;
   now?: () => Date;
 }
 
 /** One Archiver run with your settings: the command line, the hourly schedule and LangGraph all call this. */
-export async function archive(paths: Paths, logger: Logger): Promise<ArchiverStats> {
+export async function archive(paths: Paths, logger: Logger, opts: { recheckDays?: number } = {}): Promise<ArchiverStats> {
   const credentials = imapCredentialsFromEnv();
   if (!credentials) throw new ConfigError('The Archiver reads your email: set IMAP_USER and IMAP_PASSWORD in .env');
   // Your email is only ever read by a local model, never sent to Claude.
@@ -54,7 +77,7 @@ export async function archive(paths: Paths, logger: Logger): Promise<ArchiverSta
   const { mailbox } = loadJsonFile(paths.sources, SourcesSchema).emailAlerts;
   const store = new JobStore(paths.db);
   try {
-    return await runArchiver({ store, credentials, mailbox, model, logger, reportFile: path.join(path.dirname(paths.db), 'applications-report.md'), meter: new CostMeter('archiver') });
+    return await runArchiver({ store, credentials, mailbox, model, logger, reportFile: path.join(path.dirname(paths.db), 'applications-report.md'), meter: new CostMeter('archiver'), recheckDays: opts.recheckDays });
   } finally {
     store.close();
   }
@@ -138,6 +161,13 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           if (found.length) logger.info(`Archiver: going back over ${found.length} earlier email(s) from ${board.label}`);
         }
       }
+      // Asked to go back over recent mail: everything in the window is looked at again below.
+      if (deps.recheckDays && mark && mark.uidValidity === uidValidity) {
+        const since = new Date(Date.now() - deps.recheckDays * 86_400_000);
+        const found = ((await client.search({ since }, { uid: true })) || []).filter((u) => u <= mark.lastUid);
+        found.forEach((u) => earlier.add(u));
+        logger.info(`Archiver: going back over ${found.length} email(s) from the last ${deps.recheckDays} days`);
+      }
       stats.checked = uids.length + earlier.size;
 
       // Sender and subject first (cheap), then the full email only for likely ones.
@@ -151,27 +181,31 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
       if (uids.length) logger.info(`Archiver: ${uids.length} new emails, ${wanted.length} look like replies about applications`);
       // The earlier job-board emails, by the same test; read after any retries, without moving the bookmark.
       const backlog: Array<{ uid: number; messageId: string }> = [];
+      // Confirmations the rules filed without the model reading them: read again when asked to recheck.
+      const recheck: Array<{ uid: number; responseId: number }> = [];
       for await (const msg of earlier.size ? client.fetch([...earlier].sort((a, b) => a - b), { envelope: true }, { uid: true }) : []) {
         const from = msg.envelope?.from?.[0];
         const env = { fromName: from?.name ?? '', fromAddress: from?.address ?? '', subject: msg.envelope?.subject ?? '' };
         const messageId = msg.envelope?.messageId || `${uidValidity}:${msg.uid}`;
-        if (worthReading(env, companies, credentials.user) && !store.hasResponse(messageId)) backlog.push({ uid: msg.uid, messageId });
+        const before = store.responseReading(messageId);
+        if (!before && worthReading(env, companies, credentials.user)) backlog.push({ uid: msg.uid, messageId });
+        else if (deps.recheckDays && before && before.model === 'rules' && before.kind === 'confirmation') recheck.push({ uid: msg.uid, responseId: before.id });
       }
 
       const advance = (upTo: number) => store.setKv(key, JSON.stringify({ uidValidity, lastUid: upTo }));
-      // Emails the model couldn't answer in time last run, tried again (three tries in all).
+      // Emails the model couldn't answer last run, tried again (see MAX_TRIES and MAX_TIMEOUT_TRIES).
       const retryKey = `${key}:retry`;
       const retries = (JSON.parse(store.getKv(retryKey) ?? '[]') as Array<{ uid: number; messageId: string; tries: number }>).filter(
         (r) => !store.hasResponse(r.messageId),
       );
       const later: typeof retries = [];
       const handled = new Set<number>();
-      const read = async (item: { uid: number; messageId: string }): Promise<'done' | 'retry' | 'stop'> => {
-        const msg = await client.fetchOne(String(item.uid), { source: true, envelope: true, internalDate: true }, { uid: true });
-        if (!msg || !msg.source) return 'done';
+      const fetchMail = async (uid: number): Promise<RawEmail | null> => {
+        const msg = await client.fetchOne(String(uid), { source: true, envelope: true, internalDate: true }, { uid: true });
+        if (!msg || !msg.source) return null;
         const parsed = await simpleParser(msg.source);
         const from = msg.envelope?.from?.[0];
-        const mail: RawEmail = {
+        return {
           fromName: from?.name ?? '',
           fromAddress: from?.address ?? '',
           subject: parsed.subject ?? '',
@@ -179,6 +213,10 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           html: typeof parsed.html === 'string' ? parsed.html : '',
           date: parsed.date ?? new Date(msg.internalDate ?? Date.now()),
         };
+      };
+      const read = async (item: { uid: number; messageId: string }): Promise<'done' | 'retry' | 'timeout' | 'stop'> => {
+        const mail = await fetchMail(item.uid);
+        if (!mail) return 'done';
         let c;
         try {
           c = await classifyEmail(mail, emailBodyText(mail.text, mail.html), model, deps.meter);
@@ -187,7 +225,7 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           const message = (err as Error).message;
           logger.warn(`Archiver: couldn't read "${mail.subject}": ${message}`);
           // Ollama down: stop, and carry on from this email next run. A slow or odd answer: skip it for now.
-          return /isn't reachable/.test(message) ? 'stop' : 'retry';
+          return afterFailure(message);
         }
         stats.read++;
         const record = {
@@ -223,12 +261,17 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           const outcome = await read(r);
           if (outcome === 'stop') return;
           handled.add(r.uid);
-          if (outcome === 'retry' && r.tries + 1 < 3) later.push({ ...r, tries: r.tries + 1 });
+          if (outcome !== 'done') {
+            if (triesLeft(outcome, r.tries)) later.push({ ...r, tries: r.tries + 1 });
+            else logger.warn(`Archiver: gave up on an email after ${r.tries + 1} tries. "npm run archive -- --recheck 14" reads it again.`);
+          }
+          if (outcome === 'timeout') return;
         }
         for (const item of backlog) {
           const outcome = await read(item);
           if (outcome === 'stop') return;
-          if (outcome === 'retry') later.push({ ...item, tries: 1 });
+          if (outcome !== 'done') later.push({ ...item, tries: 1 });
+          if (outcome === 'timeout') return;
         }
         // Every board's earlier mail has been gone over: not again.
         store.setKv(boardsKey, JSON.stringify(JOB_BOARDS.map((b) => b.id)));
@@ -237,9 +280,34 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           if (item) {
             const outcome = await read(item);
             if (outcome === 'stop') return;
-            if (outcome === 'retry') later.push({ ...item, tries: 1 });
+            if (outcome !== 'done') later.push({ ...item, tries: 1 });
+            // It is on the retry list now: move past it, so newer mail isn't held up behind it.
+            if (outcome === 'timeout') {
+              advance(uid);
+              return;
+            }
           }
           advance(uid);
+        }
+        for (const item of recheck) {
+          const mail = await fetchMail(item.uid);
+          if (!mail) continue;
+          stats.rechecked = (stats.rechecked ?? 0) + 1;
+          let c;
+          try {
+            c = await classifyEmail(mail, emailBodyText(mail.text, mail.html), model, deps.meter);
+          } catch (err) {
+            const message = (err as Error).message;
+            logger.warn(`Archiver: couldn't read "${mail.subject}" again: ${message}`);
+            // The rest can be read again another time: nothing is lost by stopping here.
+            if (afterFailure(message) !== 'retry') return;
+            continue;
+          }
+          // Still a receipt, by the rules or by the model: leave it as it was.
+          if (c.model === 'rules' || c.kind === 'confirmation' || c.kind === 'not_related') continue;
+          store.updateResponseReading(item.responseId, c);
+          stats.corrected = (stats.corrected ?? 0) + 1;
+          logger.info(`Archiver: read again, was filed as a confirmation: ${c.kind} · ${c.company || mail.fromName} — ${c.title || mail.subject}`);
         }
       } finally {
         // Retries not reached this run stay on the list.

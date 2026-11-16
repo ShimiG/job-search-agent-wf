@@ -77,7 +77,9 @@ Commands:
   cv-check                     Check your CV's own wording: weak bullets, bullets with no number, skills nothing backs up
   reevaluate                   Re-run filters and scoring on everything Scout owns (after editing preferences or CV)
   watch [--cron "0 8 * * *"]   Keep running and do a full run on a schedule
-  archive                      Archiver: sort new replies to your applications and update data/applications-report.md
+  archive [--recheck <days>]   Archiver: sort new replies to your applications and update data/applications-report.md.
+                               --recheck goes back over that many days: reads mail it never recorded, and reads
+                               again the confirmations its rules filed without the model
   compare-scorers [--limit 40] Re-score jobs Claude scored with Gemma (Ollama) and compare
 `;
 
@@ -399,6 +401,7 @@ async function main() {
       'replace-all': { type: 'boolean' },
       remove: { type: 'boolean' },
       out: { type: 'string' },
+      recheck: { type: 'string' },
       'open-review': { type: 'boolean' },
       status: { type: 'string' },
       all: { type: 'boolean' },
@@ -522,7 +525,10 @@ async function main() {
         logger.info(`The Archiver is already running (started ${busy.startedAt}); skipping this run.`);
         return;
       }
-      await archive(paths, createLogger(undefined, { dir: paths.logsDir, agent: 'archiver' }));
+      const recheckDays = values.recheck === undefined ? undefined : Number(values.recheck);
+      if (recheckDays !== undefined && (!Number.isInteger(recheckDays) || recheckDays < 1 || recheckDays > 365)) throw new ConfigError('--recheck takes a number of days, 1 to 365');
+      const stats = await archive(paths, createLogger(undefined, { dir: paths.logsDir, agent: 'archiver' }), { recheckDays });
+      if (recheckDays) console.log(`Read ${stats.rechecked ?? 0} rule-sorted confirmation(s) again: ${stats.corrected ?? 0} turned out to be something else.`);
       return;
     }
     case 'compare-scorers':
