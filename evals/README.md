@@ -40,6 +40,30 @@ The first version of these suites had only the plain cases, and the models score
 a test nothing fails tells you nothing, and can't tell two models apart. The harder kinds are there to
 be failed sometimes.
 
+## The fourth suite: your own decisions
+
+The three suites above have clear answers, and a clear answer is easy for a model: the first run of
+the harder scoring cases still came out at 98% with a perfect ranking, with or without the advisor.
+What is hard about scoring is the middle: real postings, often known only by a title and a line, where
+the right answer is what you would have chosen.
+
+```bash
+npm run eval -- decisions                 # the model in .env, as Scout uses it
+npm run eval -- decisions --no-advisor    # the same jobs without the advisor
+npm run eval -- decisions --model claude-sonnet-5-5
+npm run eval -- compare
+```
+
+It re-scores the jobs you picked (or applied to) and the ones you dismissed from your shortlist, with
+your own CV and preferences, and reports how often a job you picked outscores one you dismissed, next
+to the same figure for the scores given at the time, and what the cutoff would keep. `--all` takes
+every scored job you decided on rather than only shortlisted ones; those extra dismissals mostly
+repeat the score, so the default leaves them out. `--limit 10` tries ten of each first.
+
+Nothing in your database changes, and the postings go where Scout sends them when it scores. It costs
+what scoring that many jobs costs, and the advisor is the expensive part, so run `--no-advisor` first.
+It is your data: nobody else can rerun it, the report names no job, and it is not part of `all`.
+
 ## Reading the results
 
 - The samples are small. A kind has 4 to 12 cases, so one case moves its rate by 8 to 25 points: use

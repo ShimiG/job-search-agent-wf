@@ -32,6 +32,8 @@ export interface CaseResult {
 export interface EvalSummary {
   suite: string;
   title: string;
+  /** A line on what the suite is, when its name alone would mislead. */
+  about?: string;
   ranAt: string;
   /** The model under test. */
   model: string;
@@ -84,7 +86,8 @@ export function loadEvalSummaries(dir: string): EvalSummary[] {
     try {
       const { results, ...summary } = JSON.parse(readFileSync(path.join(dir, name), 'utf8')) as EvalResult;
       if (!summary.suite || !Array.isArray(summary.metrics)) continue;
-      const misses = (results ?? []).filter((r) => !r.pass && !r.error).map((r) => ({ id: r.id, expected: r.expected, got: r.got }));
+      // The fixed suites' cases are fictional and can be named. A suite over your own jobs keeps its cases to itself.
+      const misses = summary.suite === 'decisions' ? [] : (results ?? []).filter((r) => !r.pass && !r.error).map((r) => ({ id: r.id, expected: r.expected, got: r.got }));
       out.push({ ...summary, misses });
     } catch {
       // A file that isn't a result is not this report's business.

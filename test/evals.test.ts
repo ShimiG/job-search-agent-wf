@@ -5,8 +5,12 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { RESPONSE_KINDS } from '../src/archiver/classify.ts';
 import { formatComparison, formatComparisons, loadComparisons } from '../src/evals/compare.ts';
-import { formatEvalResult, loadEvalProfile, loadFactCheckCases, loadReplyCases, loadScoringCases, toResult } from '../src/evals/run.ts';
-import { runFactCheckEval, runRepliesEval, runScoringEval } from '../src/evals/suites.ts';
+import { PreferencesSchema } from '../src/config.ts';
+import { JobStore } from '../src/db/store.ts';
+import { formatEvalResult, loadDecisionCases, loadEvalProfile, loadFactCheckCases, loadReplyCases, loadScoringCases, toResult } from '../src/evals/run.ts';
+import { runDecisionsEval, runFactCheckEval, runRepliesEval, runScoringEval } from '../src/evals/suites.ts';
+import { markSubmitted } from '../src/submit/run.ts';
+import { makeJob } from './helpers.ts';
 import { loadEvalSummaries, saveEvalResult } from '../src/evals/types.ts';
 import { auditCv } from '../src/cv/audit.ts';
 import type { Scorer } from '../src/llm/scorer.ts';
@@ -295,8 +299,87 @@ describe('eval results', () => {
     assert.match(table, /^\| Measure \| claude-sonnet-5-5 \| claude-haiku-5-5 \|\n\|---\|---:\|---:\|/);
     assert.match(table, /\| Invented claims caught \| 5 of 24 \(21%\) \| 5 of 24 \(21%\) \|/);
     assert.match(table, /\| Cost of the run \| \$0\.310 \| \$0\.050 \|/);
-    assert.match(formatComparisons([c!]), /^Fact-check: invented claims in a reworded CV \(48 cases\)\n\n\| Measure/);
+    assert.match(formatComparisons([c!]), /^Fact-check: invented claims in a reworded CV\n\n\| Measure/);
+    assert.match(table, /\| Cases \| 48 \| 48 \|/);
     // One model alone is nothing to compare.
     assert.deepEqual(formatComparison({ ...c!, runs: c!.runs.slice(0, 1) }), []);
+  });
+});
+
+describe('the decisions suite: your own picks and dismissals, re-scored', () => {
+  const now = '2026-11-01T09:00:00.000Z';
+  const prefs = PreferencesSchema.parse({ ...loadEvalProfile().prefs, scoring: { ...loadEvalProfile().prefs.scoring, threshold: 65, partialThreshold: 55 } });
+  const result = (score: number) => ({ score, verdict: 'good' as const, seniorityFit: 'fit' as const, matchReasons: [], gaps: [], dealbreakers: [], summary: '' });
+
+  /** Six scored jobs: what the score was, whether it was shortlisted, and what you did with it. */
+  function seed() {
+    const store = new JobStore(':memory:');
+    const add = (name: string, score: number, did: 'pick' | 'dismiss' | 'apply' | 'nothing', partial = false) => {
+      const id = store.upsert(makeJob({ externalId: `x:${name}`, company: name, descriptionIsPartial: partial }), now).id;
+      const listed = score >= (partial ? 55 : 65);
+      store.saveScore(id, result(score), listed ? 'shortlisted' : 'low_score', now, 'claude-haiku-5-5');
+      store.setStatus(id, listed ? 'shortlisted' : 'low_score', null, 'scout', now);
+      if (did === 'pick') store.setStatus(id, 'selected', null, 'user', now);
+      if (did === 'dismiss') store.setStatus(id, 'dismissed', null, 'user', now);
+      if (did === 'apply') markSubmitted(store, id, null, new Date(now));
+      return id;
+    };
+    return { store, ids: { a: add('A', 80, 'pick'), b: add('B', 70, 'dismiss'), c: add('C', 58, 'apply', true), d: add('D', 66, 'dismiss'), e: add('E', 40, 'dismiss'), f: add('F', 90, 'nothing') } };
+  }
+
+  it('takes the jobs you decided on from your shortlist, each with its own cutoff; --all adds the rest', () => {
+    const { store, ids } = seed();
+    const cases = loadDecisionCases(store, prefs);
+    // Newest first. E was never shortlisted; F was never decided on.
+    assert.deepEqual(cases.map((c) => [c.id, c.decision, c.cutoff, c.storedScore]), [[ids.d, 'no', 65, 66], [ids.c, 'yes', 55, 58], [ids.b, 'no', 65, 70], [ids.a, 'yes', 65, 80]]);
+    assert.deepEqual(loadDecisionCases(store, prefs, { all: true }).map((c) => c.id), [ids.e, ids.d, ids.c, ids.b, ids.a]);
+    assert.deepEqual(loadDecisionCases(store, prefs, { limit: 1 }).map((c) => c.id), [ids.d, ids.c]);
+  });
+
+  it('measures new scores against your decisions, beside the scores given at the time', async () => {
+    const { store, ids } = seed();
+    const cases = loadDecisionCases(store, prefs);
+    // A better scorer than the one that scored them: your picks up, your dismissals down. One job fails to score.
+    const fresh: Record<number, number> = { [ids.a]: 85, [ids.b]: 60, [ids.c]: 62 };
+    const out = await runDecisionsEval({
+      cases,
+      scorer: { model: 'fake', async score(job) {
+        const c = cases.find((x) => x.job.externalId === job.externalId)!;
+        if (c.id === ids.d) throw new Error('529 overloaded');
+        return result(fresh[c.id]!);
+      } },
+    });
+    assert.equal(metric(out.metrics, 'Jobs re-scored'), '2 you picked, 1 you dismissed');
+    // New scores: picks 85 and 62 against a dismissal at 60. At the time: 80 and 58 against 70.
+    assert.equal(metric(out.metrics, 'Chance a job you picked outscores one you dismissed'), '100%');
+    assert.equal(metric(out.metrics, 'The same, with the scores these jobs were given at the time'), '50%');
+    assert.deepEqual(metric(out.metrics, 'Jobs you picked, scored at or above the cutoff'), [2, 2]);
+    assert.deepEqual(metric(out.metrics, 'Jobs you dismissed, scored at or above the cutoff'), [0, 1]);
+    assert.deepEqual(metric(out.metrics, 'Share of that shortlist you would pick'), [2, 2]);
+    assert.equal(metric(out.metrics, 'Average change from the score given at the time'), '6.3 points');
+    const failed = out.results.find((r) => r.id === `#${ids.d}`)!;
+    assert.deepEqual([failed.error, failed.pass], ['529 overloaded', false]);
+    // Nothing was written back: the jobs keep the scores they had.
+    assert.deepEqual([store.get(ids.a)!.score, store.get(ids.b)!.score], [80, 70]);
+  });
+
+  it('its results name no job in a report, and compare across runs with a job or two more', async () => {
+    const { store } = seed();
+    const cases = loadDecisionCases(store, prefs);
+    const scorer = { model: 'fake', score: async () => result(70) };
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'evals-')), 'evals');
+    const first = toResult('decisions', 'claude-haiku-5-5', await runDecisionsEval({ cases, scorer }), 0.02, new Date('2026-11-16T10:00:00Z'));
+    saveEvalResult(dir, first);
+    saveEvalResult(dir, { ...toResult('decisions', 'claude-haiku-5-5+advisor:claude-opus-5-5', await runDecisionsEval({ cases: cases.slice(0, 3), scorer }), 0.4, new Date('2026-11-16T11:00:00Z')) });
+    const [summary] = loadEvalSummaries(dir);
+    assert.deepEqual(summary!.misses, []);
+    assert.match(summary!.about!, /^Not a fixed test set: these are jobs you picked or dismissed/);
+    const text = formatEvalResult(first);
+    assert.match(text, /Your own decisions, re-scored\n4 cases with claude-haiku-5-5, \$0\.020\nNot a fixed test set/);
+    assert.ok(!text.includes('Wrong:'));
+    // 3 cases against 4: still compared, with the count shown.
+    const [c] = loadComparisons(dir);
+    assert.deepEqual(c!.runs.map((r) => r.cases), [3, 4]);
+    assert.match(formatComparison(c!).join('\n'), /\| Cases \| 3 \| 4 \|/);
   });
 });

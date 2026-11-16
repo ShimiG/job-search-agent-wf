@@ -235,7 +235,9 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = [], compari
   if (evals.length) {
     out.push('## Evals', '', 'Fixed test sets, run on demand against the same code the agents use (`npm run eval`). Unlike the numbers above, anyone can rerun these.', '');
     for (const e of evals) {
-      out.push(`### ${e.title}`, '', `${e.cases} cases, run ${day(e.ranAt)} with ${e.model}${e.cost ? ` for ${usd(e.cost)}` : ''}${e.errors ? `; ${e.errors} case(s) could not be run` : ''}.`, '');
+      if (e.about) out.push(`### ${e.title}`, '', e.about, '');
+      else out.push(`### ${e.title}`, '');
+      out.push(`${e.cases} cases, run ${day(e.ranAt)} with ${e.model}${e.cost ? ` for ${usd(e.cost)}` : ''}${e.errors ? `; ${e.errors} case(s) could not be run` : ''}.`, '');
       out.push(...table(['Measure', 'Value'], e.metrics.map((m) => [m.label, m.count ? rate(m.count) : (m.value ?? 'n/a')])));
       const compared = comparisons.find((x) => x.suite === e.suite);
       if (compared && compared.runs.length > 1) out.push('The same cases with each model tried:', '', ...formatComparison(compared));

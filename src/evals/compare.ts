@@ -34,7 +34,9 @@ export function loadComparisons(evalsDir: string): SuiteComparison[] {
     const mine = all.filter((r) => r.suite === suite);
     const newest = mine[0]!;
     const runs: EvalSummary[] = [];
-    for (const r of mine) if (r.cases === newest.cases && !runs.some((x) => x.model === r.model)) runs.push(r);
+    // Your own decisions grow by a job or two between runs: still the same test. A fixed suite with other cases isn't.
+    const comparable = (r: EvalSummary) => suite === 'decisions' || r.cases === newest.cases;
+    for (const r of mine) if (comparable(r) && !runs.some((x) => x.model === r.model)) runs.push(r);
     out.push({ suite, title: newest.title, runs });
   }
   return out;
@@ -53,6 +55,7 @@ export function formatComparison(c: SuiteComparison): string[] {
     `| ${head.join(' | ')} |`,
     `|${head.map((_, i) => (i === 0 ? '---' : '---:')).join('|')}|`,
     ...labels.map((label) => `| ${label} | ${c.runs.map((r) => cell(r, label)).join(' | ')} |`),
+    `| Cases | ${c.runs.map((r) => r.cases).join(' | ')} |`,
     `| Could not be run | ${c.runs.map((r) => r.errors).join(' | ')} |`,
     `| Cost of the run | ${c.runs.map((r) => usd(r.cost)).join(' | ')} |`,
     `| Run on | ${c.runs.map((r) => r.ranAt.slice(0, 10)).join(' | ')} |`,
@@ -66,5 +69,5 @@ export function formatComparisons(all: SuiteComparison[]): string {
   if (!withTwo.length) {
     return 'Nothing to compare yet: run a suite with two models, for example\n  npm run eval -- scoring\n  npm run eval -- scoring --no-advisor\n  npm run eval -- scoring --model claude-sonnet-5-5';
   }
-  return withTwo.flatMap((c) => [`${c.title} (${c.runs[0]!.cases} cases)`, '', ...formatComparison(c)]).join('\n');
+  return withTwo.flatMap((c) => [c.title, '', ...formatComparison(c)]).join('\n');
 }

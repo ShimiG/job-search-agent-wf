@@ -291,3 +291,62 @@ export async function runRepliesEval(opts: {
     ],
   };
 }
+
+// ---------------------------------------------------------------- your own decisions
+
+/** A job you decided on: picked or applied to (yes), or dismissed and never picked (no). */
+export interface DecisionCase {
+  id: number;
+  decision: 'yes' | 'no';
+  job: NormalizedJob;
+  /** The cutoff this job was held to: lower for one known only by a title and a line. */
+  cutoff: number;
+  /** The score it was given at the time. */
+  storedScore: number;
+}
+
+/**
+ * The fixed suites are written to have clear answers, and a clear answer is easy. What is hard about
+ * scoring is the middle: real postings, half-described, where the right answer is what you would have
+ * chosen. So this one re-scores the jobs you did choose between and measures the scores against your
+ * decisions. Run it with two models, or with and without the advisor, and the same jobs tell them apart.
+ */
+export async function runDecisionsEval(opts: { cases: DecisionCase[]; scorer: Scorer; concurrency?: number; log?: (line: string) => void }): Promise<SuiteOutput> {
+  const scores = new Map<number, number>();
+  const results = await pool(opts.cases, opts.concurrency ?? 3, async (c): Promise<CaseResult> => {
+    const expected = c.decision === 'yes' ? 'shortlist' : 'reject';
+    try {
+      const { score } = await opts.scorer.score(c.job);
+      scores.set(c.id, score);
+      const got = score >= c.cutoff ? 'shortlist' : 'reject';
+      opts.log?.(`${got === expected ? 'ok  ' : 'MISS'} #${c.id}: ${score} (was ${c.storedScore}), you ${c.decision === 'yes' ? 'picked it' : 'dismissed it'}`);
+      return { id: `#${c.id}`, kind: c.decision, expected, got: `${got} (${score})`, pass: got === expected };
+    } catch (err) {
+      opts.log?.(`ERR  #${c.id}: ${message(err)}`);
+      return { id: `#${c.id}`, kind: c.decision, expected, got: '', pass: false, error: message(err) };
+    }
+  });
+
+  const scored = opts.cases.filter((c) => scores.has(c.id));
+  const yes = scored.filter((c) => c.decision === 'yes');
+  const no = scored.filter((c) => c.decision === 'no');
+  const now = (rows: DecisionCase[]) => rows.map((c) => scores.get(c.id)!);
+  const then = (rows: DecisionCase[]) => rows.map((c) => c.storedScore);
+  const pct = (x: number | null) => (x === null ? 'n/a' : `${Math.round(x * 100)}%`);
+  const kept = (rows: DecisionCase[]) => rows.filter((c) => scores.get(c.id)! >= c.cutoff).length;
+  const change = scored.length ? scored.reduce((n, c) => n + Math.abs(scores.get(c.id)! - c.storedScore), 0) / scored.length : null;
+  return {
+    results,
+    metrics: [
+      { label: 'Jobs re-scored', value: `${yes.length} you picked, ${no.length} you dismissed` },
+      { label: 'Chance a job you picked outscores one you dismissed (50% is a coin flip)', value: pct(auc(now(yes), now(no))) },
+      { label: 'The same, with the scores these jobs were given at the time', value: pct(auc(then(yes), then(no))) },
+      { label: 'Jobs you picked, scored at or above the cutoff', count: count(kept(yes), yes.length) },
+      { label: 'Jobs you dismissed, scored at or above the cutoff (lower is better)', count: count(kept(no), no.length) },
+      { label: 'Share of that shortlist you would pick', count: count(kept(yes), kept(yes) + kept(no)) },
+      { label: 'Median score of a job you picked', value: String(median(now(yes)) ?? 'n/a') },
+      { label: 'Median score of a job you dismissed', value: String(median(now(no)) ?? 'n/a') },
+      { label: 'Average change from the score given at the time', value: change === null ? 'n/a' : `${change.toFixed(1)} points` },
+    ],
+  };
+}

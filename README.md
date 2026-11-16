@@ -344,7 +344,12 @@ npm run eval -- factcheck --rules-only  # the rule checks alone: no model, no co
 npm run eval -- replies                 # the Archiver's local model sorting 38 emails
 npm run eval -- all
 npm run eval -- compare                 # each suite's latest run per model, side by side
+npm run eval -- decisions [--no-advisor]  # your own picks and dismissals, re-scored (your data, not a fixed set)
 ```
+
+`decisions` is the one to use when choosing a model or deciding whether the advisor is worth its cost:
+the fixed cases have clear answers that every model gets right, while your own shortlist is where
+scores are close. See [`evals/README.md`](evals/README.md).
 
 `scoring` and `factcheck` call Claude (a few cents; the result says how much) and `replies` needs
 Ollama. `--model` tests a different model, which makes these the way to compare Haiku with Sonnet, or
@@ -812,6 +817,7 @@ npm run archive [-- --recheck <days>]
 # Evals
 npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--no-advisor] [--quiet]
 npm run eval -- compare
+npm run eval -- decisions [--no-advisor] [--all] [--model M] [--limit N]
 
 # Tailor
 npm run tailor -- run [--job 12,15] [--no-pdf]
