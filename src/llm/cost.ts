@@ -114,6 +114,16 @@ export interface UsageEntry extends TokenCounts {
   error: string | null;
 }
 
+/** One line saying why a call failed. A schema error's own message is a page of JSON: say which field instead. */
+export function failureMessage(error: unknown): string {
+  const issues = (error as { issues?: Array<{ path?: unknown[]; message?: string }> } | null)?.issues;
+  if (error instanceof Error && error.name === 'ZodError' && Array.isArray(issues)) {
+    const first = issues[0];
+    return `answer didn't match the expected shape${first ? `: ${[...(first.path ?? [])].join('.') || 'answer'}: ${first.message ?? ''}` : ''}`.slice(0, 200);
+  }
+  return (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 200) || 'failed';
+}
+
 /** How long each answered call took, keyed by its usage block, for record() to pick up. */
 const durations = new WeakMap<object, number>();
 
@@ -169,10 +179,13 @@ export class CostMeter {
     this.save(purpose, model, { inputTokens: call.inputTokens, outputTokens: call.outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 }, 0, jobId, call.durationMs, null);
   }
 
-  /** A call that threw (timeout, overload, network): no tokens and no cost, only that it happened and why. */
-  fail(purpose: UsagePurpose, model: string, error: unknown, durationMs: number, jobId?: number | null): void {
-    const message = (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 200);
-    this.save(purpose, model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 }, 0, jobId, durationMs, message || 'failed');
+  /**
+   * A call that failed (timeout, overload, network, an answer that couldn't be used): no cost, only that
+   * it happened and why. `tokens` are given when the model did answer before the failure showed.
+   */
+  fail(purpose: UsagePurpose, model: string, error: unknown, durationMs: number, jobId?: number | null, tokens?: { inputTokens: number; outputTokens: number }): void {
+    const counts = { inputTokens: tokens?.inputTokens ?? 0, outputTokens: tokens?.outputTokens ?? 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 };
+    this.save(purpose, model, counts, 0, jobId, durationMs, failureMessage(error));
   }
 
   private save(purpose: UsagePurpose, model: string, counts: TokenCounts, cost: number, jobId: number | null | undefined, durationMs: number | null, error: string | null): number {

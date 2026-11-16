@@ -185,6 +185,9 @@ describe('eval results', () => {
     assert.equal(rest.length, 0, 'one entry per suite: the latest');
     assert.deepEqual([summary!.suite, summary!.model, summary!.cases, summary!.cost], ['factcheck', 'claude-sonnet-5-5', 24, 0.2]);
     assert.ok(!('results' in summary!));
+    // The cases that came out wrong are kept by name: they are fictional.
+    assert.equal(summary!.misses!.length, 7);
+    assert.deepEqual(summary!.misses![0], { id: 'fab-led-team', expected: 'unsupported', got: 'supported (rule checks only)' });
 
     const text = formatEvalResult(result);
     assert.match(text, /^Fact-check: invented claims in a reworded CV\n24 cases with rule checks only\n/);

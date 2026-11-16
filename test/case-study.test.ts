@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { JobStore } from '../src/db/store.ts';
 import { CostMeter, BATCH_DISCOUNT } from '../src/llm/cost.ts';
 import { formatCaseStudy, rate, usd } from '../src/report/format.ts';
-import { atsOf, auc, caseStudy, filterReason, median, percentile } from '../src/report/metrics.ts';
+import { atsOf, auc, caseStudy, failureReason, filterReason, median, percentile, stopReason } from '../src/report/metrics.ts';
 import { markSubmitted } from '../src/submit/run.ts';
 import type { TailoredContent, VerificationReport } from '../src/tailor/schema.ts';
 import { makeJob } from './helpers.ts';
@@ -34,6 +34,15 @@ describe('the maths', () => {
     assert.equal(atsOf('https://boards.greenhouse.io/initech/jobs/1'), 'Greenhouse');
     assert.equal(atsOf('https://careers.initech.com/apply/1'), 'Other sites');
     assert.equal(atsOf(null), 'Other sites');
+    assert.equal(stopReason('LinkedIn: Easy Apply needs your own session. Apply at https://www.linkedin.com/jobs/view/1, then run "mark-submitted 7"'), "A site it doesn't automate (LinkedIn, Indeed...)");
+    assert.equal(stopReason('the site asks you to sign in or create an account. Apply at https://initech.example.com/apply, then run "mark-submitted 7"'), 'The site wanted a sign-in or an account');
+    assert.equal(stopReason('2 required question(s) need you: "Visa?". Finish with: run --mode assist --job 7'), 'Auto mode stopped for you (a question, a CAPTCHA, a model-written answer)');
+    assert.equal(stopReason('no confirmation seen (browser closed or timed out). If you did submit, run "mark-submitted 7"'), 'No confirmation seen (window closed or timed out)');
+    assert.equal(failureReason('Ollama took longer than 300s to answer'), 'Timed out');
+    assert.equal(failureReason("Ollama isn't reachable at http://127.0.0.1:11434 (fetch failed)"), "Couldn't reach the model");
+    assert.equal(failureReason('['), "The answer didn't have the expected shape");
+    assert.equal(failureReason('529 overloaded (request id req_123)'), 'Overloaded or rate-limited');
+    assert.equal(failureReason('something odd'), 'Other');
   });
 
   it('formats rates with their counts, and marks small samples', () => {
@@ -160,6 +169,10 @@ describe('the case study', () => {
     // Yes: Globex 90, Umbrella 78, Vandelay 55 (picked from below the cutoff), Wonka 82 (applied). No: Soylent 70.
     assert.deepEqual([d.picked, d.dismissed, d.medianPicked, d.medianDismissed], [4, 1, 80, 70]);
     assert.equal(d.auc, 0.75);
+    // Among shortlisted jobs only: Globex 90, Umbrella 78 and Wonka 82 against Soylent 70.
+    assert.deepEqual([d.aucShortlisted, d.shortlisted], [1, { picked: 3, dismissed: 1 }]);
+    assert.deepEqual(d.cutoffs.find((x) => x.cutoff === 75), { cutoff: 75, picked: { n: 3, of: 4, rate: 0.75 }, dismissed: { n: 0, of: 1, rate: 0 } });
+    assert.deepEqual(d.cutoffs.find((x) => x.cutoff === 55)!.picked, { n: 4, of: 4, rate: 1 });
     assert.deepEqual(d.shortlistPrecision, { n: 3, of: 4, rate: 0.75 });
     assert.deepEqual(d.pickedBelowCutoff, { n: 1, of: 4, rate: 0.25 });
     assert.equal(d.undecided, 0);
@@ -175,6 +188,7 @@ describe('the case study', () => {
     assert.deepEqual(t.bullets, { total: 16, verbatim: 13, reworded: 3, revertedByRules: 1, revertedByFactCheck: 1 });
     assert.equal(t.otherRuleFixes, 1);
     assert.deepEqual([t.lettersRevised.n, t.needingReview.n, t.unresolvedClaims], [1, 1, 1]);
+    assert.deepEqual(t.unresolvedBy, [{ label: 'Cover letter, raised by the rule checks (a name or number in neither your CV nor the posting)', claims: 1 }]);
     assert.deepEqual(t.keywords, { cvs: 1, matched: { n: 6, of: 10, rate: 0.6 }, required: { n: 3, of: 4, rate: 0.75 } });
     // Layout and wording: the latest version of each job.
     assert.deepEqual([t.onePage.n, t.onePage.of, t.trimmedToFit.n], [1, 2, 1]);
@@ -187,6 +201,7 @@ describe('the case study', () => {
     const c = caseStudy(seed().store, NOW);
     assert.deepEqual(c.submitter.byMode, [{ mode: 'auto', attempts: 3, submitted: 2, prepared: 0, needsYou: 0, failed: 1 }]);
     assert.deepEqual(c.submitter.byAts, [{ ats: 'Greenhouse', attempts: 2, submitted: 1 }, { ats: 'Other sites', attempts: 1, submitted: 1 }]);
+    assert.deepEqual(c.submitter.stopped, [{ reason: 'It failed with an error', attempts: 1 }]);
     assert.equal(c.submitter.fields!.total, 4);
     assert.deepEqual(c.submitter.fields!.modelShare, { n: 1, of: 3, rate: 1 / 3 });
     assert.deepEqual(c.submitter.fields!.rejectedByPage, { n: 1, of: 3, rate: 1 / 3 });
@@ -214,13 +229,15 @@ describe('the case study', () => {
     assert.ok(Math.abs(k.perTailoredVersion! - sonnet / 3) < 1e-9);
     assert.equal(k.perFormFilled, null, 'no form call was recorded');
     assert.deepEqual(k.byModel.map((m) => m.model), ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5']);
-    assert.deepEqual(k.local, { calls: 2, inputTokens: 7_500, outputTokens: 280, hours: 12_000 / 3_600_000 });
+    assert.deepEqual(k.local, { calls: 2, inputTokens: 7_500, outputTokens: 280, minutes: 0.2 });
     assert.equal(k.byPurpose[0]!.label, 'writing CVs and letters');
   });
 
   it('reports failed calls, call times and runs', () => {
     const { reliability: r } = caseStudy(seed().store, NOW);
     assert.deepEqual(r.calls, { n: 1, of: 9, rate: 1 / 9 });
+    assert.deepEqual([r.claude, r.local], [{ n: 1, of: 7, rate: 1 / 7 }, { n: 0, of: 2, rate: 0 }]);
+    assert.deepEqual(r.failures, [{ reason: 'Claude: Overloaded or rate-limited', calls: 1 }]);
     const draft = r.byPurpose.find((p) => p.label === 'writing CVs and letters')!;
     assert.deepEqual([draft.calls, draft.failed], [2, 1]);
     const replies = r.byPurpose.find((p) => p.label === 'reading replies to your applications')!;
@@ -248,6 +265,10 @@ describe('the case study', () => {
     assert.match(md, /\| Rewordings taken back by the fact-check \| 1 \|/);
     assert.match(md, /\| Greenhouse \| 2 \| 1 \|/);
     assert.match(md, /Source fetches that failed: 1 of 10 \(10%\)\*/);
+    assert.match(md, /\| Claude: Overloaded or rate-limited \| 1 \|/);
+    assert.match(md, /\| It failed with an error \| 1 \|/);
+    assert.match(md, /\| The same among shortlisted jobs only \(3 yes, 1 no\) \| 100% \|/);
+    assert.match(md, /\| 75 \| 3 of 4 \(75%\)\* \| 0 of 1 \(0%\)\* \| 3 of 3 \(100%\)\* \|/);
     assert.match(md, /### Fact-check\n\n24 cases, run 2026-11-15 with claude-sonnet-5-5 for \$0\.310\./);
     assert.match(md, /\| Invented claims caught \| 11 of 12 \(92%\)\* \|/);
     // The JSON beside it carries the same counts and no more.

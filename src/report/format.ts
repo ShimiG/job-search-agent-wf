@@ -61,10 +61,10 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
   out.push('## At a glance', '');
   out.push(`- **Found** ${things(f.found, 'job')} from ${things(c.sources.length, 'source')}; ${int(f.filteredOut + f.duplicates)} dropped by rules before any model saw them, ${int(f.scored)} scored, ${int(f.shortlisted)} shortlisted.`);
   out.push(`- **Applied** to ${things(f.applications, 'job')} (${int(f.sentByTool)} sent by the Submitter); ${things(f.callbacks, 'callback')}${f.offers ? `, ${things(f.offers, 'offer')}` : ''}: ${rate({ n: f.callbacks, of: judged, rate: c.outcomes.total.rate })} of those older than ${WAITING_DAYS} days.`);
-  if (d.picked + d.dismissed) out.push(`- **Scoring**: a job you picked outscored a job you dismissed ${pct(d.auc)} of the time (${d.picked} picked, ${d.dismissed} dismissed); you picked ${rate(d.shortlistPrecision)} of the shortlisted jobs you decided on.`);
+  if (d.picked + d.dismissed) out.push(`- **Scoring**: a job you picked outscored a job you dismissed ${pct(d.auc)} of the time (${d.picked} picked, ${d.dismissed} dismissed)${d.aucShortlisted !== null ? `, and ${pct(d.aucShortlisted)} of the time among shortlisted jobs only` : ''}; you picked ${rate(d.shortlistPrecision)} of the shortlisted jobs you decided on.`);
   if (t.versions) out.push(`- **Tailoring**: ${int(t.bullets.total)} bullets written, ${pct(t.bullets.total ? t.bullets.verbatim / t.bullets.total : null)} in your CV's exact words; the checks took back ${int(t.bullets.revertedByRules + t.bullets.revertedByFactCheck)} rewordings that added something your CV doesn't say, and left ${things(t.unresolvedClaims, 'claim')} for you to judge.`);
   if (c.cost.since) out.push(`- **Cost**: ${usd(c.cost.total)} on Claude: ${usd(c.cost.perApplication)} per application, ${usd(c.cost.perCallback)} per callback. Caching and batching took ${usd(c.cost.savedByCaching + c.cost.savedByBatch)} off the list price.`);
-  if (c.reliability.calls.of) out.push(`- **Reliability**: ${rate(c.reliability.calls)} model calls failed.`);
+  if (c.reliability.calls.of) out.push(`- **Reliability**: ${rate(c.reliability.claude)} calls to Claude failed, and ${rate(c.reliability.local)} calls to the local model.`);
   out.push('');
 
   out.push('## Funnel', '', 'Each stage, and its share of the stage before it.', '');
@@ -108,12 +108,27 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
         ['Median score of a yes', num(d.medianPicked)],
         ['Median score of a no', num(d.medianDismissed)],
         ['Chance a yes outscores a no (AUC; 50% is a coin flip)', pct(d.auc)],
+        [`The same among shortlisted jobs only (${d.shortlisted.picked} yes, ${d.shortlisted.dismissed} no)`, pct(d.aucShortlisted)],
         ['Shortlisted jobs you picked, of those you decided on', rate(d.shortlistPrecision)],
         ['Jobs you picked from below the cutoff, of all you picked', rate(d.pickedBelowCutoff)],
         ['Shortlisted jobs not decided on yet', d.undecided],
       ],
     ),
   );
+
+  out.push(
+    'The second AUC is the stricter one. A job below the cutoff was shown to you as a poor fit, so dismissing it mostly repeats the score; among shortlisted jobs you were choosing between jobs the scorer liked.',
+    '',
+  );
+  if (d.cutoffs.length) {
+    out.push('What each cutoff would have put on the shortlist, of the jobs you decided on:', '');
+    out.push(
+      ...table(
+        ['Cutoff', 'Jobs you said yes to, kept', 'Jobs you said no to, kept', 'Share of that shortlist you would pick'],
+        d.cutoffs.map((x) => [x.cutoff, rate(x.picked), rate(x.dismissed), rate({ n: x.picked.n, of: x.picked.n + x.dismissed.n, rate: x.picked.n + x.dismissed.n ? x.picked.n / (x.picked.n + x.dismissed.n) : null })]),
+      ),
+    );
+  }
 
   out.push('## Tailoring', '');
   out.push(
@@ -143,10 +158,19 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
     ),
   );
 
+  if (t.unresolvedBy.length) {
+    out.push(`The ${things(t.unresolvedClaims, 'claim')} left for you:`, '');
+    out.push(...table(['Where, and which check raised it', 'Claims'], t.unresolvedBy.map((x) => [x.label, x.claims])));
+  }
+
   const s = c.submitter;
   out.push('## Sending', '');
   out.push(...table(['Mode', 'Attempts', 'Submitted', 'Prepared for you', 'Needed you', 'Failed'], s.byMode.map((m) => [m.mode, m.attempts, m.submitted, m.prepared, m.needsYou, m.failed])));
   out.push(...table(['Application system', 'Attempts', 'Submitted'], s.byAts.map((a) => [a.ats, a.attempts, a.submitted])));
+  if (s.stopped.length) {
+    out.push('Why an attempt ended without sending:', '');
+    out.push(...table(['Reason', 'Attempts'], s.stopped.map((x) => [x.reason, x.attempts])));
+  }
   if (s.fields) {
     out.push(`Form fields, from each job's latest attempt (${int(s.fields.total)} fields):`, '');
     out.push(...table(['Answered from', 'Fields'], s.fields.bySource.map((x) => [x.source.replace(/_/g, ' '), x.fields])));
@@ -193,7 +217,7 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
         ['Per form filled', usd(k.perFormFilled)],
         ['Per application sent (everything included)', usd(k.perApplication)],
         ['Per callback (everything included)', usd(k.perCallback)],
-        ['Calls handled by a local model, at no cost', `${int(k.local.calls)} (${tokens(k.local.inputTokens + k.local.outputTokens)} tokens, ${k.local.hours.toFixed(1)} hours)`],
+        ['Calls handled by a local model, at no cost', `${int(k.local.calls)} (${tokens(k.local.inputTokens + k.local.outputTokens)} tokens, ${k.local.minutes < 90 ? `${k.local.minutes.toFixed(1)} minutes` : `${(k.local.minutes / 60).toFixed(1)} hours`})`],
       ],
     ),
   );
@@ -202,6 +226,7 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
   const rel = c.reliability;
   out.push('## Reliability', '');
   out.push(...table(['What the calls were for', 'Calls', 'Failed', 'Median time', '95th percentile'], rel.byPurpose.map((p) => [p.label, int(p.calls), p.failed, secs(p.p50Ms), secs(p.p95Ms)])));
+  if (rel.failures.length) out.push(...table(['Why calls failed', 'Calls'], rel.failures.map((x) => [x.reason, x.calls])));
   out.push(...table(['Agent', 'Runs', 'Did not finish', 'Median minutes'], rel.runs.map((x) => [x.agent, x.runs, x.unfinished, num(x.medianMinutes, 1)])));
   out.push(`Source fetches that failed: ${rate(rel.sourceFetches)}. Jobs whose scoring failed: ${int(rel.scoreErrors)}.`, '');
 
@@ -210,6 +235,7 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
     for (const e of evals) {
       out.push(`### ${e.title}`, '', `${e.cases} cases, run ${day(e.ranAt)} with ${e.model}${e.cost ? ` for ${usd(e.cost)}` : ''}${e.errors ? `; ${e.errors} case(s) could not be run` : ''}.`, '');
       out.push(...table(['Measure', 'Value'], e.metrics.map((m) => [m.label, m.count ? rate(m.count) : (m.value ?? 'n/a')])));
+      if (e.misses?.length) out.push(`Wrong: ${e.misses.map((m) => `\`${m.id}\` (expected ${m.expected}, got ${m.got})`).join('; ')}.`, '');
     }
   }
 
@@ -221,7 +247,8 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
     c.period.costsFrom
       ? `- Costs are only known from ${day(c.period.costsFrom)}; per-application and per-callback costs count applications sent since then, and include the scoring of jobs never applied to.`
       : '- No model cost has been recorded yet, so the cost figures are empty.',
-    '- Call times include retries. Batch results and advisor steps carry no time of their own.',
+    '- Call times include retries. Batch results and advisor steps carry no time of their own, and calls made before timing was added have none.',
+    '- A source\'s "passed rules" counts a job that was scored even if a later change of rules filtered it out.',
     '- Tailoring counts cover every version the model wrote; layout and wording counts cover the latest version of each job. A version made before a check existed is not counted for that check.',
     '',
   );
