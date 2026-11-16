@@ -376,7 +376,7 @@ npm run review               # http://127.0.0.1:4100
 | **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. **I applied myself** on a card records a job you applied to on your own: it moves to Applied, and other listings of the same job are removed. |
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
-| **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
+| **Sending** | The Submitter at work, and jobs you apply to yourself because they are on a site it doesn't apply on. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Applied** | Every application in play, sent by the Submitter or by you: its stage (read from your email by the Archiver, or set by you), replies, things you're asked to do, its CV and cover letter, and every answer Claude wrote on the form. **Check email now** runs the Archiver. An application moves to **Settings → Archive** 30 days after you applied (whatever its stage), when you set its stage to Rejected yourself, or with **Send to archive**. A rejection read from email alone doesn't move it. |
 | **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. Cards have the same **I applied myself**. |
 | **Stats** | How your applications are doing: replies, interviews, applications per week, how many were sent with this tool and how many by you, callback rates by source and by score, and what Claude has cost. |
@@ -748,6 +748,13 @@ always stops and hands the job to you when:
 - **Solve CAPTCHAs or use stealth tricks.**
 - **Create accounts or sign in.** Workday, iCIMS, Taleo and SuccessFactors are handed to you.
 - **Apply on LinkedIn, Indeed or Israeli job boards**: their terms forbid it.
+
+A job whose application is on one of those sites is never attempted. Ready to send marks it
+**Apply yourself: LinkedIn** (or Workday, Indeed…), and when you approve it, it goes straight to
+**Sending** as "needs you", with **Apply via the alert link**, **Find the company's application page**
+and **I applied myself**. No attempt is made or recorded, the Submitter isn't started for it, and later
+runs leave it alone. If the company's own application page is found for it, the Submitter takes it from
+there like any other job.
 - **Apply twice,** or more than `maxPerCompanyPer30Days` (default 2) times to one company in 30 days.
 
 Screenshots of every attempt go to `submission/` in the job's application folder. The browser uses its

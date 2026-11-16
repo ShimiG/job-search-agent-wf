@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JobStore } from './db/store.ts';
 import { sweepAppliedListings } from './pipeline/applied.ts';
+import { parkManualOnly } from './submit/manual.ts';
 import type { VerificationReport } from './tailor/schema.ts';
 import type { JobStatus } from './types.ts';
 
@@ -69,11 +70,13 @@ export function applyPicks(store: JobStore, answer: z.input<typeof PickAnswerSch
 export function applyReview(
   store: JobStore,
   answer: z.input<typeof ReviewAnswerSchema>,
-): { approved: number[]; skipped: Skipped[]; mode?: 'prepare' | 'assist' | 'auto' } {
+): { approved: number[]; manual: number[]; skipped: Skipped[]; mode?: 'prepare' | 'assist' | 'auto' } {
   const { approve, reject, force, mode } = ReviewAnswerSchema.parse(answer);
   const skipped: Skipped[] = [];
   const now = new Date().toISOString();
   const approved: number[] = [];
+  // Approved, but on a site the Submitter never acts on (LinkedIn, Indeed...): these wait for you to apply.
+  const manual: number[] = [];
   for (const id of approve) {
     const job = store.get(id);
     if (!job || job.status !== 'tailored') {
@@ -86,11 +89,12 @@ export function applyReview(
       continue;
     }
     store.setStatus(id, 'approved', open ? `approved with ${open} unverified item(s)` : null, 'user', now);
-    approved.push(id);
+    if (parkManualOnly(store, store.get(id)!, now)) manual.push(id);
+    else approved.push(id);
   }
   const rejected = move(store, reject, 'dismissed', ['tailored', 'selected', 'tailor_error', 'approved'], 'rejected at review', skipped);
   if (rejected.length) sweepAppliedListings(store, now);
-  return { approved, skipped, ...(mode ? { mode } : {}) };
+  return { approved, manual, skipped, ...(mode ? { mode } : {}) };
 }
 
 /**
