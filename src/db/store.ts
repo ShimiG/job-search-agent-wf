@@ -939,6 +939,11 @@ export class JobStore {
       .run(r.kind, r.company, r.title, r.summary, r.action, r.model, id);
   }
 
+  /** Notes who read an email, when reading it again changed nothing else. */
+  setResponseModel(id: number, model: string): void {
+    this.db.prepare('UPDATE responses SET model = ? WHERE id = ?').run(model, id);
+  }
+
   setResponseJob(id: number, jobId: number | null): void {
     this.db.prepare('UPDATE responses SET job_id = ? WHERE id = ?').run(jobId, id);
   }

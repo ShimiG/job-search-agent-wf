@@ -186,6 +186,7 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
       [
         ['Emails about your applications', r.replies],
         ['Read by fixed rules, without a model', rate(r.byRules)],
+        ["Emails the local model couldn't read, filed for you to open", r.unread],
         ['Matched to an application', rate(r.matched)],
         ['Applications whose stage you set by hand', rate(r.setByHand)],
         ["Median days to an employer's first answer", num(r.medianDaysToFirstReply, 1)],

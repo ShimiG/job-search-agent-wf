@@ -529,7 +529,10 @@ async function main() {
       const recheckDays = values.recheck === undefined ? undefined : Number(values.recheck);
       if (recheckDays !== undefined && (!Number.isInteger(recheckDays) || recheckDays < 1 || recheckDays > 365)) throw new ConfigError('--recheck takes a number of days, 1 to 365');
       const stats = await archive(paths, createLogger(undefined, { dir: paths.logsDir, agent: 'archiver' }), { recheckDays });
-      if (recheckDays) console.log(`Read ${stats.rechecked ?? 0} rule-sorted confirmation(s) again: ${stats.corrected ?? 0} turned out to be something else.`);
+      if (recheckDays) {
+        console.log(`Read ${stats.rechecked ?? 0} email(s) again: ${stats.corrected ?? 0} turned out to be something else than they were filed as.`);
+        if (stats.notRead) console.log(`${stats.notRead} couldn't be read this time (the model didn't answer in time). Run the same command again to retry them.`);
+      }
       return;
     }
     case 'compare-scorers':

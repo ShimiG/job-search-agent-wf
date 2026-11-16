@@ -636,10 +636,12 @@ application, at most 90 days):
    furthest stage ("Rejected after interview"), replies and to-dos.
 
 Every email it reads is recorded in `responses`, so none is read twice. If Ollama is down, the run stops
-and that email is read on the next run. If Ollama doesn't answer within two minutes it is stuck, so the
-run stops there too, and the email is tried again on later runs (up to 8, since the delay isn't the
-email's doing; an answer that can't be used gets 3). **Check email now** on the Applied tab runs it
-right away.
+and that email is read on the next run. An email the model doesn't answer within two minutes is set
+aside and tried again on later runs, and the run goes on to the next one, so one slow email never holds
+up the rest; two timeouts in a row mean Ollama itself is stuck, and the run stops there. An email that
+still can't be read after 5 tries (3 for an answer that can't be used) isn't dropped: it is filed
+under its application as an update, "The local model couldn't read this email", with a to-do to open
+it yourself. **Check email now** on the Applied tab runs it right away.
 
 To go back over mail already passed:
 
@@ -647,10 +649,12 @@ To go back over mail already passed:
 npm run archive -- --recheck 30
 ```
 
-It looks again at the last 30 days: emails nothing was recorded for are read, and confirmations that
-the rules filed without the model are read again by today's rules. One that turns out to be a
-rejection, an assessment, an interview, an offer or an update is corrected in place, under the same
-application. Nothing already read by the model is touched, and it can be run as often as you like.
+It looks again at the last 30 days: emails nothing was recorded for are read, emails filed as unread
+are tried again, and confirmations that the rules filed without the model are read again by today's
+rules. One that turns out to be a rejection, an assessment, an interview, an offer or an update is
+corrected in place, under the same application. It ends by saying how many it read again, how many
+changed, and how many the model didn't answer in time; run it again to retry those. An email the model
+has read once is not read again, so each run picks up where the last one stopped.
 
 ### Tailor
 
