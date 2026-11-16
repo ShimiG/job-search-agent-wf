@@ -415,8 +415,23 @@ export const PAGE = String.raw`<!doctype html>
   function working(text) { var w = el('div', 'working'); w.appendChild(el('span', 'spin')); w.appendChild(document.createTextNode(text)); return w; }
 
   // Takes a job off every list, whatever stage it's at. A sent application is archived instead.
-  function removeRow(j) {
+  // You applied on your own (on LinkedIn, on the company's site): record it, so nothing applies again
+  // and other listings of the same job go. With "ask", a slip of the finger doesn't move a job to Applied.
+  function appliedButton(j, ask) {
+    return btn('I applied myself', 'small', function () {
+      if (ask && !confirm('Record #' + j.id + ' ' + j.company + ' — ' + j.title + ' as applied? It moves to Applied, and other listings of the same job are removed.')) return;
+      post('markApplied', { id: j.id }).then(function (res) {
+        ui.picked.delete(j.id); ui.approve.delete(j.id);
+        var more = res && res.otherListings ? ' ' + res.otherListings + ' other listing' + (res.otherListings === 1 ? '' : 's') + ' of it removed.' : '';
+        toast('Recorded #' + j.id + ' as applied.' + more);
+      }, fail);
+    });
+  }
+
+  // "applied": also offer "I applied myself", for a job you haven't sent through the Tailor and Submitter.
+  function removeRow(j, applied) {
     var row = el('div', 'row');
+    if (applied) row.appendChild(appliedButton(j, true));
     row.appendChild(btn('Remove', 'small danger', function () {
       if (!confirm('Remove #' + j.id + ' ' + j.company + ' — ' + j.title + '? It leaves every list and is not applied to.')) return;
       post('remove', { id: j.id }).then(function () { ui.picked.delete(j.id); ui.approve.delete(j.id); toast('Removed #' + j.id + '.'); }, fail);
@@ -661,7 +676,7 @@ export const PAGE = String.raw`<!doctype html>
     if (ui.tab === 'shortlist' || ui.tab === 'below') {
       list = filtered(ui.tab === 'shortlist' ? d.shortlist : (ui.below || []));
       renderToolbar(list, ui.picked);
-      list.forEach(function (j) { root.appendChild(jobCard(j, { select: ui.picked, after: [linkBox(j, 'tailor'), removeRow(j)] })); });
+      list.forEach(function (j) { root.appendChild(jobCard(j, { select: ui.picked, after: [linkBox(j, 'tailor'), removeRow(j, true)] })); });
     } else if (ui.tab === 'tailoring') {
       list = d.tailoring; renderToolbar(list, null);
       list.forEach(function (j) {
@@ -781,12 +796,7 @@ export const PAGE = String.raw`<!doctype html>
               post('retry', { ids: [j.id], mode: 'assist' }).then(function () { toast('Opening the form: check it and click Submit.'); }, fail);
             }));
           }
-          r.appendChild(btn('I applied myself', 'small', function () {
-            post('markApplied', { id: j.id }).then(function (res) {
-              var more = res && res.otherListings ? ' ' + res.otherListings + ' other listing' + (res.otherListings === 1 ? '' : 's') + ' of it removed.' : '';
-              toast('Recorded #' + j.id + ' as applied.' + more);
-            }, fail);
-          }));
+          r.appendChild(appliedButton(j, false));
           extra.push(r);
           extra.push(linkBox(j, 'sending'));
         }

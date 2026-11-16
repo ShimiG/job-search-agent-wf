@@ -373,12 +373,12 @@ npm run review               # http://127.0.0.1:4100
 
 | Tab | What you do there |
 |---|---|
-| **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. |
+| **Shortlist** | Matches appear as they're scored, best first, with why each fits and its gaps. Tick jobs, then **Send to Tailor** or **Dismiss**. Filter to full postings or partial ones. **I applied myself** on a card records a job you applied to on your own: it moves to Applied, and other listings of the same job are removed. |
 | **Tailoring** | Each picked job while its CV and cover letter are written and fact-checked. |
 | **Ready to send** | The CV and cover letter (PDF links), anything the fact-check couldn't verify, ATS keyword coverage, and the tailoring report. **Approve and send**, **Redo with a note**, or **Reject**. |
 | **Sending** | The Submitter at work. Anything that needs you shows the reason and a screenshot, with **Open it in the browser to finish**, **Find the company's application page** (alert jobs) or **I applied myself**. |
 | **Applied** | Every application in play, sent by the Submitter or by you: its stage (read from your email by the Archiver, or set by you), replies, things you're asked to do, its CV and cover letter, and every answer Claude wrote on the form. **Check email now** runs the Archiver. An application moves to **Settings → Archive** 30 days after you applied (whatever its stage), when you set its stage to Rejected yourself, or with **Send to archive**. A rejection read from email alone doesn't move it. |
-| **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. |
+| **Below cutoff** | Jobs that scored under your cutoff, in case one deserves a look. Cards have the same **I applied myself**. |
 | **Stats** | How your applications are doing: replies, interviews, applications per week, how many were sent with this tool and how many by you, callback rates by source and by score, and what Claude has cost. |
 | **Settings** | The shortlist's minimum score, **Review before sending**, your CV and certificates, and the **Archive**: applications moved out of Applied (**Back to Applied** returns one, even one older than 30 days), and picked jobs never sent. |
 
