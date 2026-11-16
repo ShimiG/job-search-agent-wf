@@ -1,4 +1,4 @@
-import { timed, type CostMeter, type UsagePurpose } from '../llm/cost.ts';
+import { ANSWER_MAX_TOKENS, asCutOff, timed, type CostMeter, type UsagePurpose } from '../llm/cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -162,7 +162,8 @@ export class AnthropicTailor implements TailorWriter, ClaimVerifier {
     const message = await timed(this.meter, purpose, this.model, () =>
       this.client.messages.parse({
         model: this.model,
-        max_tokens: maxTokens,
+        // Never less than the room thinking needs: a small cap cuts the JSON off (see ANSWER_MAX_TOKENS).
+        max_tokens: Math.max(maxTokens, ANSWER_MAX_TOKENS),
         system: [
           { type: 'text', text: system },
           { type: 'text', text: profile(cv), cache_control: { type: 'ephemeral' } },
@@ -170,7 +171,9 @@ export class AnthropicTailor implements TailorWriter, ClaimVerifier {
         messages: [{ role: 'user', content: user }],
         output_config: { format: zodOutputFormat(schema) },
       }),
-    );
+    ).catch((err: unknown) => {
+      throw asCutOff(err, 'The response');
+    });
     // The job comes from withJob() around the tailoring of each job.
     this.meter?.record(purpose, this.model, message.usage);
     if (message.stop_reason === 'refusal') throw new Error('Model declined the request');

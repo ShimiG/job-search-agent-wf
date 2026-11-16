@@ -69,6 +69,28 @@ describe('AnthropicScorer', () => {
     assert.ok((request!.output_config as { format: unknown }).format);
   });
 
+  it('leaves the answer room for thinking, with or without the advisor', async () => {
+    // The models think before answering and thinking counts toward max_tokens: at 1,024 the score's
+    // JSON was sometimes cut off mid-string, only without the advisor (which had twice the room).
+    const seen: number[] = [];
+    const parse = async (params: { max_tokens: number }) => {
+      seen.push(params.max_tokens);
+      return { stop_reason: 'end_turn', parsed_output: base, usage: { input_tokens: 1, output_tokens: 1 } };
+    };
+    const client = { messages: { parse }, beta: { messages: { parse } } };
+    await new AnthropicScorer({ cv, prefs: makePrefs(), model: 'claude-haiku-5-5', client: client as never }).score(makeJob());
+    await new AnthropicScorer({ cv, prefs: makePrefs(), model: 'claude-haiku-5-5', advisor: 'claude-opus-5-5', client: client as never }).score(makeJob());
+    assert.deepEqual(seen, [16_000, 16_000]);
+  });
+
+  it('says so plainly when an answer arrives cut off, and passes other errors through', async () => {
+    const failing = (message: string) => ({ messages: { parse: async () => { throw new Error(message); } } });
+    const cut = new AnthropicScorer({ cv, prefs: makePrefs(), client: failing('Failed to parse structured output: Error: Failed to parse structured output as JSON: Unterminated string in JSON at position 418 (line 1 column 419)') as never });
+    await assert.rejects(cut.score(makeJob()), /^Error: The score was cut off before it was complete \(the model ran out of room for its answer\)$/);
+    const overloaded = new AnthropicScorer({ cv, prefs: makePrefs(), client: failing('529 overloaded') as never });
+    await assert.rejects(overloaded.score(makeJob()), /^Error: 529 overloaded$/);
+  });
+
   it('turns refusals and missing output into errors', async () => {
     for (const reply of [{ stop_reason: 'refusal', parsed_output: null }, { stop_reason: 'end_turn', parsed_output: null }]) {
       const client = { messages: { parse: async () => reply } };

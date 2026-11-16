@@ -63,7 +63,7 @@ describe('batch scoring: the Claude scorer', () => {
     assert.equal(call!.via, 'beta');
     assert.deepEqual(call!.body.betas, ['advisor-tool-2026-03-01']);
     const params = call!.body.requests[0]!.params as { tools: Array<{ type: string; model: string }>; max_tokens: number };
-    assert.deepEqual([params.tools[0]!.type, params.tools[0]!.model, params.max_tokens], ['advisor_20260301', 'claude-opus-5-5', 2048]);
+    assert.deepEqual([params.tools[0]!.type, params.tools[0]!.model, params.max_tokens], ['advisor_20260301', 'claude-opus-5-5', 16_000]);
   });
 
   it('asks the advisor over a wider range of scores in a batch than live, both set in preferences', async () => {

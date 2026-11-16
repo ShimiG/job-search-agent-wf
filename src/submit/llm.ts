@@ -1,4 +1,4 @@
-import { timed, type CostMeter } from '../llm/cost.ts';
+import { ANSWER_MAX_TOKENS, asCutOff, timed, type CostMeter } from '../llm/cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -95,7 +95,7 @@ export class AnthropicFieldMapper implements FieldMapper {
     };
     const message = await timed(this.meter, 'form', this.model, () => this.client.messages.parse({
       model: this.model,
-      max_tokens: 4000,
+      max_tokens: ANSWER_MAX_TOKENS,
       system: [
         { type: 'text', text: INSTRUCTIONS },
         { type: 'text', text: `<candidate_cv>\n${JSON.stringify(input.cv, null, 1)}\n</candidate_cv>`, cache_control: { type: 'ephemeral' } },
@@ -109,7 +109,9 @@ export class AnthropicFieldMapper implements FieldMapper {
         },
       ],
       output_config: { format: zodOutputFormat(MapperSchema) },
-    }));
+    })).catch((err: unknown) => {
+      throw asCutOff(err, 'The form answers');
+    });
     this.meter?.record('form', this.model, message.usage);
     if (message.stop_reason === 'refusal') throw new Error('Model declined to map the form');
     if (!message.parsed_output) throw new Error('Model returned no structured output');

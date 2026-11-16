@@ -41,6 +41,7 @@ describe('the maths', () => {
     assert.equal(failureReason('Ollama took longer than 300s to answer'), 'Timed out');
     assert.equal(failureReason("Ollama isn't reachable at http://127.0.0.1:11434 (fetch failed)"), "Couldn't reach the model");
     assert.equal(failureReason('['), "The answer didn't have the expected shape");
+    assert.equal(failureReason('Failed to parse structured output: Error: Failed to parse structured output as JSON: Unterminated string in JSON at position 418'), 'The answer was cut off');
     assert.equal(failureReason('529 overloaded (request id req_123)'), 'Overloaded or rate-limited');
     assert.equal(failureReason('something odd'), 'Other');
   });

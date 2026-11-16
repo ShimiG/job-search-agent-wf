@@ -1,4 +1,4 @@
-import { BATCH_DISCOUNT, timed, type ApiUsage, type CostMeter } from './cost.ts';
+import { ANSWER_MAX_TOKENS, asCutOff, BATCH_DISCOUNT, timed, type ApiUsage, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -187,7 +187,8 @@ export class AnthropicScorer implements Scorer {
   private request(job: NormalizedJob, inBatch = false) {
     return {
       model: this.executor,
-      max_tokens: 1024,
+      // Thinking counts toward this, so it is sized for more than the score itself (see ANSWER_MAX_TOKENS).
+      max_tokens: ANSWER_MAX_TOKENS,
       // The instructions and the CV are identical for every job, so they're cached:
       // after the first call each job only pays full price for the posting itself.
       system: [
@@ -199,11 +200,9 @@ export class AnthropicScorer implements Scorer {
     };
   }
 
-  /** What the advisor adds to a request: room for its call, and the tool itself. */
+  /** What the advisor adds to a request: the tool itself. The request already has room for its call. */
   private advisorParams(advisor: string) {
     return {
-      // Room for the call to the advisor as well as the score.
-      max_tokens: 2048,
       // The tool list never changes, so the cached prefix (tools, then system) stays valid.
       tools: [{ type: 'advisor_20260301' as const, name: 'advisor' as const, model: advisor, max_uses: 1, max_tokens: ADVISOR_MAX_TOKENS, caching: { type: 'ephemeral' as const } }],
     };
@@ -223,9 +222,13 @@ export class AnthropicScorer implements Scorer {
     const id = (job as { id?: unknown }).id;
     const jobId = typeof id === 'number' ? id : null;
     const advisor = this.advisor;
+    // A cut-off answer makes the SDK throw while parsing it, before a stop reason can be read: say what happened.
+    const cutOff = (err: unknown): never => {
+      throw asCutOff(err, 'The score');
+    };
     const message = advisor
-      ? await timed(this.meter, 'score', this.executor, () => this.client.beta.messages.parse({ ...request, ...this.advisorParams(advisor), betas: [ADVISOR_BETA] }), jobId)
-      : await timed(this.meter, 'score', this.executor, () => this.client.messages.parse(request), jobId);
+      ? await timed(this.meter, 'score', this.executor, () => this.client.beta.messages.parse({ ...request, ...this.advisorParams(advisor), betas: [ADVISOR_BETA] }), jobId).catch(cutOff)
+      : await timed(this.meter, 'score', this.executor, () => this.client.messages.parse(request), jobId).catch(cutOff);
     this.recordCost(message.usage, jobId);
     if (message.stop_reason === 'refusal') throw new Error('Model declined to score this posting');
     if (message.stop_reason === 'max_tokens') throw new Error('Score response was cut off (max_tokens)');

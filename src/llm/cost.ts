@@ -124,6 +124,23 @@ export function failureMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).split('\n')[0]!.slice(0, 200) || 'failed';
 }
 
+/**
+ * Room for one structured answer. The current models think before they answer, and thinking counts
+ * toward this cap: a cap sized for the answer alone (a score is a few hundred tokens) is sometimes
+ * used up before the JSON is finished, and the answer arrives cut off. Tokens are billed as used,
+ * not as allowed, so a generous cap costs nothing by itself.
+ */
+export const ANSWER_MAX_TOKENS = 16_000;
+
+/**
+ * The SDK's error for a structured answer that isn't complete JSON, in plain words. It nearly always
+ * means the answer ran out of room. Any other error is returned as it is.
+ */
+export function asCutOff(err: unknown, what: string): unknown {
+  if (!(err instanceof Error) || !/Failed to parse structured output/.test(err.message)) return err;
+  return new Error(`${what} was cut off before it was complete (the model ran out of room for its answer)`, { cause: err });
+}
+
 /** How long each answered call took, keyed by its usage block, for record() to pick up. */
 const durations = new WeakMap<object, number>();
 

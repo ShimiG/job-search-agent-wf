@@ -255,7 +255,7 @@ const FAILURE_REASONS: Array<[RegExp, string]> = [
   [/took longer than|timed? ?out|ETIMEDOUT|aborted/i, 'Timed out'],
   [/isn't reachable|ECONNREFUSED|ECONNRESET|fetch failed|network|socket/i, "Couldn't reach the model"],
   [/other than JSON/i, 'The answer was not JSON'],
-  [/ran out of room|max_tokens|cut off/i, 'The answer was cut off'],
+  [/ran out of room|max_tokens|cut off|Failed to parse structured output/i, 'The answer was cut off'],
   [/expected shape|^\[$|ZodError/i, "The answer didn't have the expected shape"],
   [/overloaded|rate.?limit|\b429\b|\b529\b/i, 'Overloaded or rate-limited'],
   [/HTTP 5\d\d|\b5\d\d\b|internal server/i, 'Server error'],
