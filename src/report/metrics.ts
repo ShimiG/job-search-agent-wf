@@ -120,6 +120,8 @@ export interface ReplyMetrics {
   byKind: Array<{ kind: string; replies: number }>;
   /** Read by fixed rules (standard confirmations) instead of the model. */
   byRules: Count;
+  /** Emails the local model couldn't read after several tries, filed for you to open. */
+  unread: number;
   matched: Count;
   /** Applications whose stage you set by hand. */
   setByHand: Count;
@@ -533,6 +535,7 @@ function replyMetrics(store: JobStore, now: Date): ReplyMetrics {
     replies: replies.length,
     byKind: tally(replies, (r) => r.kind).map(([kind, n]) => ({ kind, replies: n })),
     byRules: count(replies.filter((r) => r.model === 'rules').length, replies.length),
+    unread: replies.filter((r) => r.model === 'unread').length,
     matched: count(replies.filter((r) => r.jobId !== null).length, replies.length),
     setByHand: count(apps.filter((a) => a.row.manual).length, apps.length),
     medianDaysToFirstReply: median(firstReply),

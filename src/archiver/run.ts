@@ -2,15 +2,15 @@ import { CostMeter } from '../llm/cost.ts';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError, imapCredentialsFromEnv, loadJsonFile, SourcesSchema, type ImapCredentials, type Paths } from '../config.ts';
-import { JobStore } from '../db/store.ts';
+import { JobStore, type ResponseRecord } from '../db/store.ts';
 import { ollamaHasModel, ollamaModel } from '../llm/ollama.ts';
-import { emailBodyText, type RawEmail } from '../sources/applications.ts';
+import { companyFromSender, emailBodyText, parseAppliedEmail, type RawEmail } from '../sources/applications.ts';
 import type { Logger } from '../util/logger.ts';
 import { normalizeCompany } from '../util/text.ts';
 import { JOB_BOARDS } from '../sources/job-boards.ts';
 import { classifyEmail, worthReading } from './classify.ts';
 import { fileReply } from './record.ts';
-import { buildReport, formatReport, groupApplications } from './report.ts';
+import { buildReport, formatReport, groupApplications, matchApplication } from './report.ts';
 
 /*
  * The Archiver: reads new email since its last run, has a local model sort replies about your
@@ -29,21 +29,62 @@ export interface ArchiverStats {
   /** With --recheck: confirmations read again by today's rules, and how many turned out to be something else. */
   rechecked?: number;
   corrected?: number;
+  /** With --recheck: emails the model didn't answer in time this run; another recheck tries them again. */
+  notRead?: number;
+  /** Emails given up on after several tries, filed as unread for you to open. */
+  unread?: number;
 }
 
 /** An odd answer comes out the same every time, so three tries is plenty. */
 export const MAX_TRIES = 3;
-/** A timeout is the machine's doing, not the email's: it gets more runs before the email is given up on. */
-export const MAX_TIMEOUT_TRIES = 8;
+/** A timeout may be the machine's doing rather than the email's: it gets two more runs before the email is given up on. */
+export const MAX_TIMEOUT_TRIES = 5;
+/** Recorded as the reader of an email that was given up on: nobody read it. */
+export const UNREAD = 'unread';
 
 /**
- * What a failed read means for the email and for the run. Ollama gone: stop, the email hasn't been
- * tried. A timeout: Ollama is stuck, so the next email would wait as long; stop, and try this one
- * again next run. Anything else is about this email: skip it for now and go on.
+ * What a failed read means. Ollama gone: stop, the email hasn't been tried. A timeout or an answer
+ * that can't be used: this email is tried again on a later run, and the run goes on to the next one
+ * (see TimeoutWatch for when it doesn't).
  */
 export function afterFailure(message: string): 'stop' | 'timeout' | 'retry' {
   if (/isn't reachable/.test(message)) return 'stop';
   return /took longer than/.test(message) ? 'timeout' : 'retry';
+}
+
+/**
+ * Tells one slow email from a stuck Ollama. Some emails make the model run on until the time limit,
+ * every time: stopping the run for one of those would hold up all the mail behind it. Two timeouts in
+ * a row, though, and the next email would only wait as long: the run stops there.
+ */
+export class TimeoutWatch {
+  private inARow = 0;
+  /** Call with each email's outcome; true when the run should stop. */
+  stuck(outcome: 'done' | 'retry' | 'timeout' | 'stop'): boolean {
+    this.inARow = outcome === 'timeout' ? this.inARow + 1 : 0;
+    return this.inARow >= 2;
+  }
+}
+
+/**
+ * What is recorded for an email the model couldn't read after several tries: an update with a to-do,
+ * so it shows under its application instead of vanishing. The company is the sender's, to file it by.
+ */
+export function unreadRecord(messageId: string, mail: RawEmail): Omit<ResponseRecord, 'id' | 'jobId'> {
+  const applied = parseAppliedEmail(mail);
+  return {
+    messageId,
+    receivedAt: mail.date.toISOString(),
+    fromName: mail.fromName,
+    fromAddress: mail.fromAddress,
+    subject: mail.subject,
+    kind: 'update',
+    company: applied?.company || companyFromSender(mail.fromName),
+    title: applied?.title ?? '',
+    summary: "The local model couldn't read this email.",
+    action: 'Open it in your inbox and read it yourself',
+    model: UNREAD,
+  };
 }
 
 /** Whether an email that failed again gets another run, after `tries` earlier ones. */
@@ -182,14 +223,14 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
       // The earlier job-board emails, by the same test; read after any retries, without moving the bookmark.
       const backlog: Array<{ uid: number; messageId: string }> = [];
       // Confirmations the rules filed without the model reading them: read again when asked to recheck.
-      const recheck: Array<{ uid: number; responseId: number }> = [];
+      const recheck: Array<{ uid: number; responseId: number; was: string }> = [];
       for await (const msg of earlier.size ? client.fetch([...earlier].sort((a, b) => a - b), { envelope: true }, { uid: true }) : []) {
         const from = msg.envelope?.from?.[0];
         const env = { fromName: from?.name ?? '', fromAddress: from?.address ?? '', subject: msg.envelope?.subject ?? '' };
         const messageId = msg.envelope?.messageId || `${uidValidity}:${msg.uid}`;
         const before = store.responseReading(messageId);
         if (!before && worthReading(env, companies, credentials.user)) backlog.push({ uid: msg.uid, messageId });
-        else if (deps.recheckDays && before && before.model === 'rules' && before.kind === 'confirmation') recheck.push({ uid: msg.uid, responseId: before.id });
+        else if (deps.recheckDays && before && ((before.model === 'rules' && before.kind === 'confirmation') || before.model === UNREAD)) recheck.push({ uid: msg.uid, responseId: before.id, was: before.model });
       }
 
       const advance = (upTo: number) => store.setKv(key, JSON.stringify({ uidValidity, lastUid: upTo }));
@@ -256,6 +297,20 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
         return 'done';
       };
 
+      // Two timeouts in a row mean Ollama is stuck; one means that email is slow, and the rest go on.
+      const watch = new TimeoutWatch();
+      // An email that keeps failing is not dropped: it is filed as unread, for you to open.
+      const giveUp = async (item: { uid: number; messageId: string }, tries: number) => {
+        const mail = await fetchMail(item.uid);
+        if (!mail || store.hasResponse(item.messageId)) return;
+        const record = unreadRecord(item.messageId, mail);
+        // Only under an application that exists: an email nobody read is no ground for recording a new one.
+        const jobId = matchApplication(record, rows);
+        store.saveResponse({ ...record, jobId }, new Date().toISOString());
+        stats.unread = (stats.unread ?? 0) + 1;
+        logger.warn(`Archiver: couldn't read "${mail.subject}" in ${tries} tries. It is filed as unread${jobId === null ? '' : ` under #${jobId}`}: open it in your inbox.`);
+      };
+
       try {
         for (const r of retries) {
           const outcome = await read(r);
@@ -263,31 +318,30 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           handled.add(r.uid);
           if (outcome !== 'done') {
             if (triesLeft(outcome, r.tries)) later.push({ ...r, tries: r.tries + 1 });
-            else logger.warn(`Archiver: gave up on an email after ${r.tries + 1} tries. "npm run archive -- --recheck 14" reads it again.`);
+            else await giveUp(r, r.tries + 1);
           }
-          if (outcome === 'timeout') return;
+          if (watch.stuck(outcome)) return;
         }
         for (const item of backlog) {
           const outcome = await read(item);
           if (outcome === 'stop') return;
           if (outcome !== 'done') later.push({ ...item, tries: 1 });
-          if (outcome === 'timeout') return;
+          if (watch.stuck(outcome)) return;
         }
         // Every board's earlier mail has been gone over: not again.
         store.setKv(boardsKey, JSON.stringify(JOB_BOARDS.map((b) => b.id)));
         for (const uid of uids) {
           const item = wanted.find((w) => w.uid === uid);
+          let stuck = false;
           if (item) {
             const outcome = await read(item);
             if (outcome === 'stop') return;
             if (outcome !== 'done') later.push({ ...item, tries: 1 });
-            // It is on the retry list now: move past it, so newer mail isn't held up behind it.
-            if (outcome === 'timeout') {
-              advance(uid);
-              return;
-            }
+            stuck = watch.stuck(outcome);
           }
+          // An email that failed is on the retry list: move past it, so newer mail isn't held up behind it.
           advance(uid);
+          if (stuck) return;
         }
         for (const item of recheck) {
           const mail = await fetchMail(item.uid);
@@ -299,15 +353,24 @@ async function readNewMail(deps: ArchiverDeps, stats: ArchiverStats): Promise<vo
           } catch (err) {
             const message = (err as Error).message;
             logger.warn(`Archiver: couldn't read "${mail.subject}" again: ${message}`);
-            // The rest can be read again another time: nothing is lost by stopping here.
-            if (afterFailure(message) !== 'retry') return;
+            const outcome = afterFailure(message);
+            // Ollama gone or stuck: the rest can be read again another time. One slow email: on to the next.
+            if (outcome === 'stop' || watch.stuck(outcome)) return;
+            stats.notRead = (stats.notRead ?? 0) + 1;
             continue;
           }
-          // Still a receipt, by the rules or by the model: leave it as it was.
-          if (c.model === 'rules' || c.kind === 'confirmation' || c.kind === 'not_related') continue;
-          store.updateResponseReading(item.responseId, c);
-          stats.corrected = (stats.corrected ?? 0) + 1;
-          logger.info(`Archiver: read again, was filed as a confirmation: ${c.kind} · ${c.company || mail.fromName} — ${c.title || mail.subject}`);
+          watch.stuck('done');
+          const wasUnread = item.was === UNREAD;
+          // Still a receipt by the rules, and it was one before: nothing was read, nothing to note.
+          if (c.model === 'rules' && !wasUnread) continue;
+          if (wasUnread || (c.kind !== 'confirmation' && c.kind !== 'not_related')) {
+            store.updateResponseReading(item.responseId, c);
+            stats.corrected = (stats.corrected ?? 0) + 1;
+            logger.info(`Archiver: read again, was ${wasUnread ? 'unread' : 'filed as a confirmation'}: ${c.kind} · ${c.company || mail.fromName} — ${c.title || mail.subject}`);
+          } else {
+            // The model read it and it is a receipt: note who read it, so it isn't read a third time.
+            store.setResponseModel(item.responseId, c.model);
+          }
         }
       } finally {
         // Retries not reached this run stay on the list.

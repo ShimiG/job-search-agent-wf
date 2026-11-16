@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { rulesAnswer } from '../src/archiver/classify.ts';
-import { afterFailure, MAX_TIMEOUT_TRIES, MAX_TRIES, triesLeft } from '../src/archiver/run.ts';
+import { afterFailure, MAX_TIMEOUT_TRIES, MAX_TRIES, TimeoutWatch, triesLeft, UNREAD, unreadRecord } from '../src/archiver/run.ts';
+import { matchApplication, groupApplications } from '../src/archiver/report.ts';
+import { markSubmitted } from '../src/submit/run.ts';
+import { makeJob } from './helpers.ts';
 import { JobStore } from '../src/db/store.ts';
 import { loadReplyCases } from '../src/evals/run.ts';
 import type { RawEmail } from '../src/sources/applications.ts';
@@ -50,13 +53,37 @@ describe('which emails the rules may file without the model', () => {
 });
 
 describe('after an email could not be read', () => {
-  it('a timeout stops the run and is tried again more often than an odd answer; Ollama gone stops without a try', () => {
+  it('one slow email does not stop the run; two timeouts in a row do', () => {
+    const watch = new TimeoutWatch();
+    // A slow email between ones that are read: the run goes on.
+    assert.deepEqual(['done', 'timeout', 'done', 'timeout', 'retry'].map((o) => watch.stuck(o as never)), [false, false, false, false, false]);
+    // Ollama stuck: the second timeout in a row stops it.
+    assert.deepEqual(['timeout', 'timeout'].map((o) => watch.stuck(o as never)), [false, true]);
+  });
+
+  it('an email given up on is filed as unread under its application, with a to-do, and creates nothing', () => {
+    const store = new JobStore(':memory:');
+    const id = store.upsert(makeJob({ company: 'Acme', title: 'Integration Engineer' }), '2026-11-01T09:00:00.000Z').id;
+    markSubmitted(store, id, null, new Date('2026-11-01T09:00:00Z'));
+    const record = unreadRecord('<slow@x>', mail('An update on your candidacy', 'A very long email the model never finished reading.', { name: 'Acme Careers', address: 'careers@acme.example' }));
+    assert.deepEqual([record.kind, record.model, record.company, record.action], ['update', UNREAD, 'Acme', 'Open it in your inbox and read it yourself']);
+    const jobId = matchApplication(record, groupApplications(store.sentApplications()));
+    assert.equal(jobId, id);
+    store.saveResponse({ ...record, jobId }, '2026-11-10T09:00:00.000Z');
+    assert.deepEqual(store.responses().map((r) => [r.jobId, r.kind, r.summary]), [[id, 'update', "The local model couldn't read this email."]]);
+    // From a sender with no application behind it: kept, unmatched, and no application appears.
+    const stray = unreadRecord('<stray@x>', mail('Hello', 'x', { name: 'Initech Talent', address: 'talent@initech.example' }));
+    assert.equal(matchApplication(stray, groupApplications(store.sentApplications())), null);
+    assert.equal(store.sentApplications().length, 1);
+  });
+
+  it('a timeout is tried again more often than an odd answer; Ollama gone stops without a try', () => {
     assert.equal(afterFailure("Ollama isn't reachable at http://127.0.0.1:11434 (fetch failed). Start it with: brew services start ollama"), 'stop');
     assert.equal(afterFailure('Ollama took longer than 120s to answer'), 'timeout');
     assert.equal(afterFailure('Ollama returned something other than JSON'), 'retry');
-    assert.deepEqual([MAX_TRIES, MAX_TIMEOUT_TRIES], [3, 8]);
+    assert.deepEqual([MAX_TRIES, MAX_TIMEOUT_TRIES], [3, 5]);
     assert.deepEqual([triesLeft('retry', 1), triesLeft('retry', 2)], [true, false]);
-    assert.deepEqual([triesLeft('timeout', 2), triesLeft('timeout', 6), triesLeft('timeout', 7)], [true, true, false]);
+    assert.deepEqual([triesLeft('timeout', 2), triesLeft('timeout', 3), triesLeft('timeout', 4)], [true, true, false]);
   });
 });
 
@@ -71,5 +98,10 @@ describe('reading an email again', () => {
     store.updateResponseReading(before.id, { kind: 'assessment', company: 'Acme', title: 'Integration Engineer', summary: 'A home assignment to complete.', action: 'Send it back within 5 days', model: 'ollama:gemma3:12b' });
     const [after] = store.responses();
     assert.deepEqual([after!.kind, after!.title, after!.action, after!.model, after!.messageId], ['assessment', 'Integration Engineer', 'Send it back within 5 days', 'ollama:gemma3:12b', '<a@x>']);
+
+    // Read again and still a receipt: only who read it changes, so the next recheck passes it by.
+    store.saveResponse({ messageId: '<b@x>', jobId: null, receivedAt: now, fromName: 'Acme', fromAddress: 'hr@acme.example', subject: 'Received', kind: 'confirmation', company: 'Acme', title: '', summary: 's', action: '', model: 'rules' }, now);
+    store.setResponseModel(store.responseReading('<b@x>')!.id, 'ollama:gemma3:12b');
+    assert.deepEqual(store.responseReading('<b@x>'), { id: store.responseReading('<b@x>')!.id, kind: 'confirmation', model: 'ollama:gemma3:12b' });
   });
 });

@@ -56,7 +56,7 @@ export function emailBodyText(text: string, html: string): string {
 }
 
 /** The hiring company from the sender's name: "Mize", "EY Talent Acquisition", "Anna Korzh - Online Doctor AG". */
-function companyFromSender(name: string): string {
+export function companyFromSender(name: string): string {
   const display = tidy(name.includes(' - ') ? name.split(' - ').pop()! : name).replace(
     /\s+(?:talent acquisition|people (?:&|and) talent|recruiting|recruitment|careers|hiring team|hr|jobs)(?: team)?$/i,
     '',
