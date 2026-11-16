@@ -1,4 +1,4 @@
-import { timed, usageCost, type CostMeter } from './cost.ts';
+import { ANSWER_MAX_TOKENS, timed, usageCost, type CostMeter } from './cost.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
@@ -150,7 +150,7 @@ export async function extractPosting(
   const message = await timed(opts.meter, 'posting', model, () =>
     client.messages.parse({
       model,
-      max_tokens: 8000,
+      max_tokens: ANSWER_MAX_TOKENS,
       system: INSTRUCTIONS,
       messages: [{ role: 'user', content: `<page>\n${pageText}\n</page>` }],
       output_config: { format: zodOutputFormat(Extract), effort: 'low' },
@@ -225,7 +225,7 @@ export async function pastedPosting(
   const message = await timed(opts.meter, 'posting', model, () =>
     client.messages.parse({
       model,
-      max_tokens: 1000,
+      max_tokens: ANSWER_MAX_TOKENS,
       system: DETAILS_INSTRUCTIONS,
       messages: [{ role: 'user', content: `<posting>\n${description.slice(0, 60_000)}\n</posting>` }],
       output_config: { format: zodOutputFormat(Details), effort: 'low' },

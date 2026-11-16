@@ -337,19 +337,30 @@ The numbers above are yours and nobody can rerun them. Evals are the other kind:
 cases in [`evals/`](evals/README.md), run through the same code the agents use.
 
 ```bash
-npm run eval -- scoring                 # good fits shortlisted? poor fits rejected? planted instructions ignored?
-npm run eval -- factcheck               # invented claims in a reworded CV caught? honest ones left alone?
+npm run eval -- scoring                 # good fits shortlisted? keyword traps and dealbreakers rejected? planted instructions ignored?
+npm run eval -- scoring --no-advisor    # the same without the advisor model, to see what it adds
+npm run eval -- factcheck               # plain and subtle inventions in a reworded CV caught? honest ones left alone?
 npm run eval -- factcheck --rules-only  # the rule checks alone: no model, no cost
-npm run eval -- replies                 # the Archiver's local model sorting 24 emails
+npm run eval -- replies                 # the Archiver's local model sorting 38 emails
 npm run eval -- all
+npm run eval -- compare                 # each suite's latest run per model, side by side
+npm run eval -- decisions [--no-advisor]  # your own picks and dismissals, re-scored (your data, not a fixed set)
 ```
+
+`decisions` is the one to use when choosing a model or deciding whether the advisor is worth its cost:
+the fixed cases have clear answers that every model gets right, while your own shortlist is where
+scores are close. See [`evals/README.md`](evals/README.md).
 
 `scoring` and `factcheck` call Claude (a few cents; the result says how much) and `replies` needs
 Ollama. `--model` tests a different model, which makes these the way to compare Haiku with Sonnet, or
 a local model with Claude, before switching. Results are saved under `data/evals/` and appear in the
-case study. The rule checks alone, which need no model, catch 5 of the 12 invented claims (the ones
-that add a number or a name) and take back none of the 12 honest rewordings; what the fact-checker
-adds on top is what `npm run eval -- factcheck` measures. The samples are small: read
+case study, with a side-by-side table once a suite has been run with two models. Each suite has plain
+cases and harder ones (keyword traps, disguised fits and single dealbreakers for scoring; inventions
+with no number or name to catch for the fact-check; requests hidden inside receipts for replies),
+reported on separate lines. The rule checks alone, which need no model, catch 5 of the 12 plain
+inventions (the ones that add a number or a name), none of the 12 subtle ones, and take back none of
+the 24 honest rewordings; what the fact-checker adds on top is what `npm run eval -- factcheck`
+measures. The samples are small: read
 [`evals/README.md`](evals/README.md) before quoting a rate.
 
 ### Logs
@@ -804,7 +815,9 @@ npm run scout -- compare-scorers [--limit 40]
 npm run archive [-- --recheck <days>]
 
 # Evals
-npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--quiet]
+npm run eval -- scoring | factcheck | replies | all [--model M] [--limit N] [--rules-only] [--no-advisor] [--quiet]
+npm run eval -- compare
+npm run eval -- decisions [--no-advisor] [--all] [--model M] [--limit N]
 
 # Tailor
 npm run tailor -- run [--job 12,15] [--no-pdf]
@@ -891,7 +904,7 @@ automatically; elsewhere, point `TAILOR_TEST_BROWSER` at a Chromium binary.
 - **The PDF text check reads the file with one parser** (pdf.js). It catches text that isn't in the
   file as characters, or is stored out of order; an employer's ATS may still read a clean file its own
   way, especially right-to-left text.
-- **The eval cases are small and hand-labelled.** 24 to 26 cases a suite, written and labelled by
+- **The eval cases are small and hand-labelled.** 38 to 58 cases a suite, written and labelled by
   hand: enough to catch a regression or compare two models, not to quote precise rates. A label can be
   wrong; read a case before trusting a surprising result.
 - **The fact-check is a strong filter, not a guarantee,** and the rule checks catch new numbers and tool

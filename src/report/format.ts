@@ -1,5 +1,6 @@
 import type { OutcomeGroup } from '../pipeline/outcomes.ts';
 import { WAITING_DAYS } from '../pipeline/outcomes.ts';
+import { formatComparison, type SuiteComparison } from '../evals/compare.ts';
 import type { EvalSummary } from '../evals/types.ts';
 import type { CaseStudy, Count } from './metrics.ts';
 
@@ -38,7 +39,7 @@ function outcomeTable(first: string, groups: OutcomeGroup[]): string[] {
   );
 }
 
-export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string {
+export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = [], comparisons: SuiteComparison[] = []): string {
   const f = c.funnel;
   const day = (iso: string | null) => (iso ? iso.slice(0, 10) : 'n/a');
   const out: string[] = [
@@ -234,8 +235,12 @@ export function formatCaseStudy(c: CaseStudy, evals: EvalSummary[] = []): string
   if (evals.length) {
     out.push('## Evals', '', 'Fixed test sets, run on demand against the same code the agents use (`npm run eval`). Unlike the numbers above, anyone can rerun these.', '');
     for (const e of evals) {
-      out.push(`### ${e.title}`, '', `${e.cases} cases, run ${day(e.ranAt)} with ${e.model}${e.cost ? ` for ${usd(e.cost)}` : ''}${e.errors ? `; ${e.errors} case(s) could not be run` : ''}.`, '');
+      if (e.about) out.push(`### ${e.title}`, '', e.about, '');
+      else out.push(`### ${e.title}`, '');
+      out.push(`${e.cases} cases, run ${day(e.ranAt)} with ${e.model}${e.cost ? ` for ${usd(e.cost)}` : ''}${e.errors ? `; ${e.errors} case(s) could not be run` : ''}.`, '');
       out.push(...table(['Measure', 'Value'], e.metrics.map((m) => [m.label, m.count ? rate(m.count) : (m.value ?? 'n/a')])));
+      const compared = comparisons.find((x) => x.suite === e.suite);
+      if (compared && compared.runs.length > 1) out.push('The same cases with each model tried:', '', ...formatComparison(compared));
       if (e.misses?.length) out.push(`Wrong: ${e.misses.map((m) => `\`${m.id}\` (expected ${m.expected}, got ${m.got})`).join('; ')}.`, '');
     }
   }
