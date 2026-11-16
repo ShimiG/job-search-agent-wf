@@ -1,3 +1,4 @@
+import { cliErrorMessage } from './util/cli-error.ts';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -542,10 +543,6 @@ async function main() {
 }
 
 main().catch((err: unknown) => {
-  if (err instanceof ConfigError) {
-    console.error(err.message);
-  } else {
-    console.error(err);
-  }
+  console.error(cliErrorMessage(err, 'npm run scout -- help') ?? err);
   process.exitCode = 1;
 });

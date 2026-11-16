@@ -1,3 +1,4 @@
+import { cliErrorMessage } from '../util/cli-error.ts';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -204,6 +205,6 @@ async function main() {
 }
 
 main().catch((err: unknown) => {
-  console.error(err instanceof ConfigError ? err.message : err);
+  console.error(cliErrorMessage(err, 'npm run tailor -- help') ?? err);
   process.exitCode = 1;
 });
