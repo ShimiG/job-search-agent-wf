@@ -29,6 +29,8 @@ describe('which emails the rules may file without the model', () => {
       'Thank you for your application to Acme! We would love to set up a 30-minute call. What is your availability this week?',
       'Thanks for applying. We are delighted to offer you the position.',
       'Thank you for applying to Acme. Hiring for this role is on hold until next quarter.',
+      // A request with none of the usual words for one: a step to complete, a link, a time limit.
+      'Thanks for applying to Acme! As a first step, all candidates complete a 20-minute skills check. Yours stays open for 7 days: https://apply.example/acme/dana',
       'תודה על פנייתך. Thank you for applying to Acme. לצערנו החלטנו שלא להתקדם עם מועמדותך.',
       // A receipt that mentions interviews in passing: the model decides, which costs seconds, not a callback.
       'Thank you for applying to Acme. If your profile is a match, a recruiter will contact you to schedule an interview.',

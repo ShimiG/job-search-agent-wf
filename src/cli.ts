@@ -23,6 +23,7 @@ import { openReviewPage } from './review/launch.ts';
 import { withCertificates } from './cv/certificates.ts';
 import { auditCv, formatAudit } from './cv/audit.ts';
 import { FORM_FIELD, LinkError, overriddenBy, setCvLink } from './cv/links.ts';
+import { loadComparisons } from './evals/compare.ts';
 import { loadEvalSummaries } from './evals/types.ts';
 import { formatCaseStudy } from './report/format.ts';
 import { caseStudy } from './report/metrics.ts';
@@ -489,7 +490,7 @@ async function main() {
       try {
         const study = caseStudy(store);
         const evals = loadEvalSummaries(paths.evalsDir);
-        const markdown = formatCaseStudy(study, evals);
+        const markdown = formatCaseStudy(study, evals, loadComparisons(paths.evalsDir));
         const file = values.out ? path.resolve(String(values.out)) : path.join(paths.dataDir, 'case-study.md');
         writeFileSync(file, markdown);
         writeFileSync(file.replace(/\.md$/i, '') + '.json', JSON.stringify({ ...study, evals }, null, 2) + '\n');
