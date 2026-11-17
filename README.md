@@ -691,22 +691,33 @@ has read once is not read again, so each run picks up where the last one stopped
    digits for numbers, no adverbs that praise the work, at most two lines. Skills your chosen bullets
    show are preferred over ones that appear nowhere else on the page.
 
-   The CV is positioned for the role in the posting, the way recruiters for technical roles read it:
-   - **Headline:** the standard job title the posting uses (Software Engineer, Backend Developer)
-     when your real work fits it, plus your core area. Never a seniority your CV doesn't show; the job
-     titles under Experience stay exactly as your CV has them.
+   The CV is positioned for the role in the posting, decided by its title:
+   - **AI automation roles** (a title with AI, automation, agents, LLM, chatbots, conversational…,
+     including "AI Automation Engineer") lead with the AI agents and automations you build and run,
+     with the integration and coding stack behind them. They are never reframed as general software
+     engineering.
+   - **Plain engineering titles** (Software Engineer, Backend Developer, Integration Engineer) read as a
+     software engineer's CV: engineering scope first, AI as the area it is applied to, and standard
+     engineering terms where they describe the same work.
+   - **Anything else** is presented for the posting's own title.
+
+   Either way:
+   - **Headline:** the job title the posting uses when your real work fits it, plus your core area.
+     Never a seniority your CV doesn't show; the job titles under Experience stay exactly as your CV
+     has them.
    - **Summary:** two sentences at most: role title, core stack, production scope, one ownership
-     signal. Engineering work first, tool branding second.
+     signal, leading with what the role is about.
    - **Bullets:** what was built, what it connects to, and what production problem it solves, with
      ownership verbs (built, integrated, operated, maintained) where your highlight supports them. Scale,
      reliability, latency, usage or business effect leads when your highlight states it.
    - **Experience leads.** A project is included only if it strengthens the case for this role, the
      most technical first, with fewer bullets than your latest role.
-   - **Skills** are ordered by what a recruiter for the role searches for: the core stack (languages,
-     frameworks, databases, APIs) first, then tools, then AI tools and practices, unless the role is
-     about those.
-   - **Keywords:** standard engineering terms over niche phrasing when they describe the same work, and
-     the posting's core stack terms your CV backs in the summary, a bullet and the skills.
+   - **Skills** are ordered by what a recruiter for the role searches for: the skills the role is about
+     first (AI agent and automation skills for an AI automation role; languages, frameworks, databases
+     and APIs for an engineering one), then the rest.
+   - **Keywords:** the standard terms recruiters for the role search for over niche phrasing when they
+     describe the same work, and the posting's core terms your CV backs in the summary, a bullet and
+     the skills.
 
    All of it within the truthfulness rules below: describing the same work in standard terms is
    allowed, adding to it is not.
