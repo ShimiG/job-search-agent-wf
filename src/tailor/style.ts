@@ -63,19 +63,56 @@ export function wordingProblems(text: string): string[] {
 /** A bullet says something measurable when it carries a number. */
 export const hasNumber = (text: string) => /\d/.test(text);
 
+/** A summary longer than this stops being read: role, stack, scope and one ownership signal fit in two. */
+export const MAX_SUMMARY_SENTENCES = 2;
+
+/**
+ * Sentences in a piece of text: a full stop, question or exclamation mark followed by a space and a
+ * capital letter, a digit or a Hebrew letter starts a new one. "Node.js" and "e.g. the" don't.
+ */
+export function sentenceCount(text: string): number {
+  // An abbreviation's full stop ends nothing: "e.g. REST APIs", "Acme Inc. Built".
+  const t = text.trim().replace(/\b(e\.g|i\.e|etc|vs|incl|approx|cf|a\.k\.a|U\.S|U\.K|Inc|Ltd|Co|Corp|Jr|Sr|Dr|Mr|Ms|No)\./gi, '$1');
+  if (!t) return 0;
+  return 1 + (t.match(/[.!?]["'”’)\]]?\s+(?=[\p{Lu}\p{N}\p{Script=Hebrew}])/gu) ?? []).length;
+}
+
 export interface StyleNote {
-  /** "bullet:<highlight id>". */
+  /** "bullet:<highlight id>", "summary", or "projects". */
   where: string;
   text: string;
   problems: string[];
-  /** The bullet is your CV's own wording, so the fix belongs in your CV, not in a redo. */
+  /** The text is your CV's own wording, so the fix belongs in your CV, not in a redo. */
   fromCv: boolean;
 }
 
-/** Every bullet of a tailored CV that breaks a rule, in the order they appear on the page. */
-export function styleNotes(content: Pick<TailoredContent, 'experience' | 'projects'>, cv: MasterCv): StyleNote[] {
+/** What breaks a writing rule in a tailored CV, in the order it appears on the page. */
+export function styleNotes(content: Pick<TailoredContent, 'experience' | 'projects'> & { summary?: string }, cv: MasterCv): StyleNote[] {
   const highlights = highlightIndex(cv);
   const notes: StyleNote[] = [];
+  const summary = content.summary?.trim() ?? '';
+  const sentences = sentenceCount(summary);
+  if (sentences > MAX_SUMMARY_SENTENCES) {
+    notes.push({
+      where: 'summary',
+      text: summary,
+      problems: [`the summary is ${sentences} sentences: two at most (role title, core stack, production scope, one ownership signal)`],
+      fromCv: summary === cv.summary.trim(),
+    });
+  }
+  // Experience leads: a project with more bullets than the latest role pulls the eye away from it.
+  const latest = content.experience[0]?.bullets.length ?? 0;
+  for (const p of content.projects) {
+    if (latest && p.bullets.length > latest) {
+      const name = cv.projects.find((x) => x.id === p.id)?.name ?? p.id;
+      notes.push({
+        where: `projects:${p.id}`,
+        text: name,
+        problems: [`this project has ${p.bullets.length} bullets and your latest role ${latest}: experience should lead, projects back it up`],
+        fromCv: false,
+      });
+    }
+  }
   for (const entry of [...content.experience, ...content.projects]) {
     for (const b of entry.bullets) {
       const problems = bulletProblems(b.text);
@@ -85,15 +122,21 @@ export function styleNotes(content: Pick<TailoredContent, 'experience' | 'projec
   return notes;
 }
 
-/** A note for "Redo with a note": fix the wording of the bullets the writer can fix. */
+/** A note for "Redo with a note": fix what the writer can fix. */
 export function styleRedoNote(notes: StyleNote[]): string {
   const fixable = notes.filter((n) => !n.fromCv);
   if (!fixable.length) return '';
-  return `Rewrite these CV bullets to follow the bullet style rules, keeping the same facts: ${fixable.map((n) => `"${n.text.slice(0, 60)}…" (${n.problems.map((p) => p.split(':')[0]).join('; ')})`).join(' | ')}`;
+  const what = (n: StyleNote) =>
+    n.where === 'summary' ? 'Shorten the summary to two sentences: role title, core stack, production scope, one ownership signal.'
+    : n.where.startsWith('projects:') ? `Give the project "${n.text}" fewer bullets than the latest role.`
+    : `"${n.text.slice(0, 60)}…" (${n.problems.map((p) => p.split(':')[0]).join('; ')})`;
+  const bullets = fixable.filter((n) => n.where.startsWith('bullet:')).map(what);
+  const other = fixable.filter((n) => !n.where.startsWith('bullet:')).map(what);
+  return [...other, ...(bullets.length ? [`Rewrite these CV bullets to follow the bullet style rules, keeping the same facts: ${bullets.join(' | ')}`] : [])].join(' ');
 }
 
 /** Markdown section for the tailoring report. */
 export function formatStyleNotes(notes: StyleNote[] | undefined): string[] {
   if (!notes?.length) return [];
-  return ['## Bullet style', ...notes.map((n) => `- ${n.fromCv ? '(your CV\'s wording) ' : ''}"${n.text}"\n  ${n.problems.map((p) => `→ ${p}`).join('\n  ')}`), ''];
+  return ['## Wording and layout', ...notes.map((n) => `- ${n.fromCv ? '(your CV\'s wording) ' : ''}"${n.text}"\n  ${n.problems.map((p) => `→ ${p}`).join('\n  ')}`), ''];
 }

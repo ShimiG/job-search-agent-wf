@@ -477,7 +477,7 @@ export const PAGE = String.raw`<!doctype html>
   function styleBox(j) {
     var s = j.docs.style, n = s.notes.length;
     var box = keep(el('details'), 'style-' + j.id);
-    box.appendChild(el('summary', null, 'CV wording: ' + n + (n === 1 ? ' bullet' : ' bullets') + ' to tighten'));
+    box.appendChild(el('summary', null, 'CV wording and layout: ' + n + ' to tighten'));
     var ul = el('ul');
     s.notes.forEach(function (note) {
       var li = el('li', null, '“' + note.text + '”');
@@ -745,7 +745,7 @@ export const PAGE = String.raw`<!doctype html>
         if (j.docs && j.docs.style) {
           var sn = j.docs.style.notes.length;
           var st = el('span', 'tag warn', 'Wording ' + sn);
-          st.title = sn + (sn === 1 ? ' bullet breaks' : ' bullets break') + ' a CV writing rule';
+          st.title = sn + (sn === 1 ? ' part of the CV breaks' : ' parts of the CV break') + ' a writing rule';
           tags.push(st);
         }
         if (j.docs && j.docs.pdfText) {
@@ -1149,7 +1149,7 @@ export const PAGE = String.raw`<!doctype html>
       }
       d.appendChild(ul); p.appendChild(d);
     }
-    findings('audit-numbers', 'Highlights with no number: add a real figure if you have one', a.noNumber);
+    findings('audit-numbers', 'Highlights with no number: add a real one if you have it (scale, reliability, speed, usage, business effect)', a.noNumber);
     return p;
   }
 

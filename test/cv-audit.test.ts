@@ -111,3 +111,17 @@ test('a Hebrew CV is only checked for length', () => {
   base.skills = [];
   assert.ok(auditIsClean(auditCv(base)));
 });
+
+test('a summary over two sentences, and "strong" as a self-given grade, as on a real CV', () => {
+  const a = auditCv(
+    cv({
+      summary: 'AI automation developer with 5+ years at Acme. Sole developer of a production WhatsApp system. Also builds n8n workflows.',
+      skills: [{ category: 'Languages', items: ['JavaScript (strong; ES5 production runtime)', 'TypeScript'] }],
+    }),
+  );
+  assert.ok(a.general.some((g) => g.startsWith('The summary is 3 sentences. Two at most reads best for a technical role')));
+  const graded = a.skills.find((s) => s.skill.startsWith('JavaScript'))!;
+  assert.deepEqual([graded.kind, graded.problem.split(':')[0]], ['graded', '"strong" is a grade you gave yourself']);
+  // Two sentences, with Node.js and e.g. in them: nothing to say about length.
+  assert.ok(!auditCv(cv({ summary: 'Backend developer building Node.js services, e.g. REST APIs. Owns a production system.' })).general.some((g) => g.includes('sentences')));
+});

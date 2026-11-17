@@ -1,5 +1,5 @@
 import type { MasterCv } from '../config.ts';
-import { hasNumber, wordingProblems } from '../tailor/style.ts';
+import { hasNumber, MAX_SUMMARY_SENTENCES, sentenceCount, wordingProblems } from '../tailor/style.ts';
 import { containsKeyword } from '../util/text.ts';
 
 /*
@@ -46,7 +46,7 @@ const GENERIC_TOOLS = [
   'word', 'microsoft word', 'powerpoint', 'outlook', 'google docs', 'google workspace', 'gmail', 'email', 'windows',
 ];
 /** A self-given grade: nobody can check it, and it invites a question the bullets should answer instead. */
-const SELF_RATING = /\b(expert|advanced|proficient|intermediate|beginner|basic|familiar(?:ity)?|working knowledge)\b|\d+\s*%|\b\d\s*\/\s*(?:5|10)\b|[★⭐]/i;
+const SELF_RATING = /\b(expert|advanced|proficient|intermediate|beginner|basic|strong|familiar(?:ity)?|working knowledge)\b|\d+\s*%|\b\d\s*\/\s*(?:5|10)\b|[★⭐]/i;
 
 /** A highlight may run longer than a printed bullet (the Tailor shortens it), but not this long. */
 export const MAX_HIGHLIGHT_CHARS = 300;
@@ -126,6 +126,8 @@ export function auditCv(cv: MasterCv): CvAudit {
   const general: string[] = [];
   const summary = cv.summary.trim();
   if (summary.length > MAX_SUMMARY_CHARS) general.push(`The summary runs to ${summary.length} characters: about four lines (${MAX_SUMMARY_CHARS}) is as much as gets read.`);
+  const sentences = sentenceCount(summary);
+  if (sentences > MAX_SUMMARY_SENTENCES) general.push(`The summary is ${sentences} sentences. Two at most reads best for a technical role: the role title, the core stack, the production scope, and one ownership signal. The Tailor writes a two-sentence one for each job either way.`);
   const summaryWording = wordingProblems(summary).filter((p) => p.startsWith('"'));
   for (const p of summaryWording) general.push(`The summary: ${p}.`);
   const skillCount = cv.skills.reduce((n, g) => n + g.items.length, 0);
@@ -156,7 +158,7 @@ export function formatAudit(a: CvAudit): string {
     if (unshown.length) out.push(`- No highlight or project mentions these, so a reader has only the word to go on: ${unshown.map((x) => x.skill).join(', ')}`);
   }
   if (a.noNumber.length) {
-    out.push('', `No number (${a.noNumber.length}). If you have a real figure (how many, how much faster, how often), add it; if not, leave it:`);
+    out.push('', `No number (${a.noNumber.length}). If you have a real figure, add it: scale (users, messages, records a day), reliability (uptime, error rate), speed (latency, time saved), usage, or a business effect. If not, leave it:`);
     for (const f of a.noNumber) out.push(`- [${f.id}] ${f.text}`);
   }
   return out.join('\n');

@@ -146,7 +146,10 @@ npm run scout -- cv-check
   Slack, Microsoft Office), repeats, and skills that no highlight, project stack or certificate shows.
 - **No number:** highlights with no figure in them, listed separately. Add one only if you have a real
   one; the check never suggests a number.
-- A summary over about four lines, more than 30 skills, and roles with fewer than 2 highlights.
+- A summary over about four lines or over two sentences, more than 30 skills, and roles with fewer
+  than 2 highlights.
+- Self-given grades include "strong" ("JavaScript (strong)"), and the no-number list suggests
+  which figures recruiters for technical roles look for: scale, reliability, speed, usage, business effect.
 
 It only reports; nothing is rewritten. The wording rules are for English; a Hebrew or Russian CV is
 checked for length, skills and numbers. The same check is on the review page under
@@ -687,6 +690,26 @@ has read once is not read again, so each run picks up where the last one stopped
    "Responsible for", the result up front when your highlight states one (never a suggested number),
    digits for numbers, no adverbs that praise the work, at most two lines. Skills your chosen bullets
    show are preferred over ones that appear nowhere else on the page.
+
+   The CV is positioned for the role in the posting, the way recruiters for technical roles read it:
+   - **Headline:** the standard job title the posting uses (Software Engineer, Backend Developer)
+     when your real work fits it, plus your core area. Never a seniority your CV doesn't show; the job
+     titles under Experience stay exactly as your CV has them.
+   - **Summary:** two sentences at most: role title, core stack, production scope, one ownership
+     signal. Engineering work first, tool branding second.
+   - **Bullets:** what was built, what it connects to, and what production problem it solves, with
+     ownership verbs (built, integrated, operated, maintained) where your highlight supports them. Scale,
+     reliability, latency, usage or business effect leads when your highlight states it.
+   - **Experience leads.** A project is included only if it strengthens the case for this role, the
+     most technical first, with fewer bullets than your latest role.
+   - **Skills** are ordered by what a recruiter for the role searches for: the core stack (languages,
+     frameworks, databases, APIs) first, then tools, then AI tools and practices, unless the role is
+     about those.
+   - **Keywords:** standard engineering terms over niche phrasing when they describe the same work, and
+     the posting's core stack terms your CV backs in the summary, a bullet and the skills.
+
+   All of it within the truthfulness rules below: describing the same work in standard terms is
+   allowed, adding to it is not.
 2. **Rules.** Bullets must cite real highlight IDs, skills must be yours, every job in your history
    stays, and a reworded line that adds a number or a tool name your CV doesn't contain reverts to your
    exact wording. A name counts as yours in any form your CV has it: "LLM" and "LLMs" are one
@@ -723,8 +746,9 @@ has read once is not read again, so each run picks up where the last one stopped
    letter, or half of any paragraph, matches one earlier letter, Ready to send says which one and
    offers **Redo with fresh wording**. A repeat of a letter to the same company is marked in red: the
    same people may read both. Redoing the same job never counts as a repeat.
-8. **Bullet style.** Each bullet of the finished CV is checked against the writing rules from step 1.
-   Ready to send shows "Wording 2" and the bullets with what is off about each. A bullet that is your
+8. **Wording and layout.** Each bullet of the finished CV is checked against the writing rules from
+   step 1, the summary is held to two sentences, and a project with more bullets than your latest role
+   is flagged. Ready to send shows "Wording 2" and what is off about each. A bullet that is your
    CV's own wording says so (fix it once in your CV); for the rest, **Redo with tighter wording** fills
    in a note for the Tailor. Nothing is rewritten on its own, and it never holds up an application.
 9. **PDF text.** An ATS doesn't look at the page: it pulls the text out of the file. So the finished CV
