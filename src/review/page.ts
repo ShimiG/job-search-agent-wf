@@ -1160,21 +1160,27 @@ export const PAGE = String.raw`<!doctype html>
     var row = el('div', 'row');
     var input = el('input'); input.type = 'file'; input.accept = '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     input.setAttribute('aria-label', 'CV file');
-    row.appendChild(input);
-    var go = btn(ui.cvBusy ? 'Reading your CV…' : 'Upload CV', 'primary', function () {
+    // Read the file as soon as it is chosen. Closing the file dialog gives the window focus back, and the
+    // page redraws on focus (and every few seconds), which builds a new, empty file picker in its place.
+    input.addEventListener('change', function () {
       var f = input.files && input.files[0];
-      if (!f) return toast('Choose a PDF or Word file first.');
-      if (f.size > 10 * 1024 * 1024) return toast('That file is over 10 MB.');
+      if (!f) return;
+      if (!/\.(pdf|docx)$/i.test(f.name)) { ui.cvFile = null; render(); return toast('Choose a PDF or Word (.docx) file.'); }
+      if (f.size > 10 * 1024 * 1024) { ui.cvFile = null; render(); return toast('That file is over 10 MB.'); }
       var reader = new FileReader();
-      reader.onload = function () {
-        ui.cvBusy = true; ui.cvPreview = null; render();
-        var data = String(reader.result).split(',')[1];
-        fetch('/api/cvParse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: f.name, data: data }) })
-          .then(function (r) { return r.json().then(function (x) { if (!r.ok) throw new Error(x.error || r.status); return x; }); })
-          .then(function (x) { ui.cvPreview = x; }, fail)
-          .finally(function () { ui.cvBusy = false; render(); });
-      };
+      reader.onload = function () { ui.cvFile = { name: f.name, size: f.size, data: String(reader.result).split(',')[1] }; render(); };
       reader.readAsDataURL(f);
+    });
+    row.appendChild(input);
+    if (ui.cvFile) row.appendChild(el('span', 'hint', 'Chosen: ' + ui.cvFile.name + ' (' + size(ui.cvFile.size) + ')'));
+    var go = btn(ui.cvBusy ? 'Reading your CV…' : 'Upload CV', 'primary', function () {
+      var f = ui.cvFile;
+      if (!f) return toast('Choose a PDF or Word file first.');
+      ui.cvBusy = true; ui.cvPreview = null; render();
+      fetch('/api/cvParse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: f.name, data: f.data }) })
+        .then(function (r) { return r.json().then(function (x) { if (!r.ok) throw new Error(x.error || r.status); return x; }); })
+        .then(function (x) { ui.cvPreview = x; ui.cvFile = null; }, fail)
+        .finally(function () { ui.cvBusy = false; render(); });
     });
     go.disabled = ui.cvBusy;
     row.appendChild(go);
