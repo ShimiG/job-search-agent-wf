@@ -94,6 +94,7 @@ picked up from their confirmation emails, so Scout never shows you those jobs ag
 | `REVIEW_REMOTE=true` | Lets your phone open the review page (see [On your phone](#on-your-phone)). |
 | `REVIEW_AUTO_OPEN=false` | Stops Scout from opening the review page when it finishes. |
 | `REVIEW_PORT`, `LANGGRAPH_URL` | Defaults 4100 and `http://127.0.0.1:2024`. |
+| `LOG_LEVEL` | `debug`, `info` (default), `warn` or `error`: how much the agents print. |
 | `LOG_TO_FILE=false`, `LOG_KEEP_DAYS` | Turns off the log files in `data/logs/`, or keeps them longer than 30 days (see [Logs](#logs)). |
 
 ### Projects in your CV
