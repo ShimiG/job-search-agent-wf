@@ -205,6 +205,8 @@ export const PAGE = String.raw`<!doctype html>
     picked: new Set(), approve: new Set(), open: new Set(), notes: {}, redoOpen: new Set(), busy: false,
     cv: null, cvPreview: null, cvBusy: false, apps: null, archiveFilter: 'all',
     linkOpen: new Set(), links: {}, linkBusy: null,
+    // Jobs whose agent you just restarted: their buttons stay locked until the server shows the run.
+    restarting: {},
     // Settings being edited: kept here so the page's redraws don't wipe what you're typing.
     cutoff: null, cert: { title: '', issuer: '', year: '', file: null }, certBusy: false, certError: ''
   };
@@ -249,9 +251,12 @@ export const PAGE = String.raw`<!doctype html>
       .finally(function () { ui.busy = false; refresh(true); });
   }
   function refresh(force) {
+    var asked = Date.now();
     return fetch('/api/state').then(function (r) { return r.json(); }).then(function (d) {
       var h = JSON.stringify(d);
       ui.data = d;
+      // A state asked for after the server took the restart shows its run: the run decides from here.
+      Object.keys(ui.restarting).forEach(function (id) { var at = ui.restarting[id]; if (at && at <= asked) delete ui.restarting[id]; });
       if (ui.tab === 'below' && (force || !ui.below)) loadBelow();
       if (ui.tab === 'applied' || ui.tab === 'stats' || ui.tab === 'settings') loadApps();
       // Only redraw when something changed, so typing a note or reading isn't interrupted.
@@ -412,6 +417,23 @@ export const PAGE = String.raw`<!doctype html>
     return wrap;
   }
 
+  // Restarts an agent on one job. The button stays greyed out from the click until the run ends,
+  // and comes back only if the run failed again (the job is then still in its failed state).
+  function agentRunning(d, kind, id) { return d.tasks.some(function (t) { return t.kind === kind && !t.done && t.jobIds.indexOf(id) >= 0; }); }
+  function restartButton(j, kind, text, cls, action, body, done) {
+    var b = btn(text, cls, function () {
+      if (j.id in ui.restarting) return;
+      ui.restarting[j.id] = 0; render();
+      post(action, body).then(function (r) { ui.restarting[j.id] = Date.now(); done(r); }, function (e) { delete ui.restarting[j.id]; fail(e); });
+    });
+    if (!((j.id in ui.restarting) || agentRunning(ui.data, kind, j.id))) return b;
+    b.disabled = true;
+    // A disabled button gets no hover events, so the tooltip sits on its wrapper.
+    b.style.pointerEvents = 'none';
+    var w = el('span'); w.title = 'process is running'; w.style.cursor = 'not-allowed'; w.style.display = 'inline-block';
+    w.appendChild(b);
+    return w;
+  }
   function working(text) { var w = el('div', 'working'); w.appendChild(el('span', 'spin')); w.appendChild(document.createTextNode(text)); return w; }
 
   // Takes a job off every list, whatever stage it's at. A sent application is archived instead.
@@ -686,7 +708,7 @@ export const PAGE = String.raw`<!doctype html>
         if (j.status === 'tailor_error') {
           extra.push(el('p', 'note', 'Tailoring failed: ' + (j.reason || 'unknown error')));
           var r = el('div', 'row');
-          r.appendChild(btn('Try again', 'small', function () { post('retry', { ids: [j.id], mode: $('mode').value }).then(function () { toast('Tailoring #' + j.id + ' again.'); }, fail); }));
+          r.appendChild(restartButton(j, 'tailor', 'Try again', 'small', 'retry', { ids: [j.id], mode: $('mode').value }, function () { toast('Tailoring #' + j.id + ' again.'); }));
           extra.push(r);
         } else {
           var tailoring = d.tasks.some(function (t) { return t.kind === 'tailor' && !t.done && t.jobIds.indexOf(j.id) >= 0; }) || (d.pipeline && d.pipeline.stage === 'tailoring');
@@ -694,7 +716,7 @@ export const PAGE = String.raw`<!doctype html>
           else {
             extra.push(el('p', 'note', 'Picked, waiting for the Tailor.'));
             var r2 = el('div', 'row');
-            r2.appendChild(btn('Start the Tailor', 'small primary', function () { post('pick', { ids: [j.id], mode: $('mode').value }).then(function () { toast('Tailoring #' + j.id + '.'); }, fail); }));
+            r2.appendChild(restartButton(j, 'tailor', 'Start the Tailor', 'small primary', 'pick', { ids: [j.id], mode: $('mode').value }, function () { toast('Tailoring #' + j.id + '.'); }));
             extra.push(r2);
           }
         }
@@ -778,7 +800,7 @@ export const PAGE = String.raw`<!doctype html>
           else {
             extra.push(el('p', 'note', 'Approved, waiting for the Submitter.'));
             var r0 = el('div', 'row');
-            r0.appendChild(btn('Start the Submitter', 'small primary', function () { post('retry', { ids: [j.id], mode: $('mode').value }).then(function () { toast('Submitter started.'); }, fail); }));
+            r0.appendChild(restartButton(j, 'submit', 'Start the Submitter', 'small primary', 'retry', { ids: [j.id], mode: $('mode').value }, function () { toast('Submitter started.'); }));
             extra.push(r0);
           }
         } else {
@@ -801,8 +823,8 @@ export const PAGE = String.raw`<!doctype html>
             }));
             r.appendChild(link(j.url, 'btn small', 'Apply via the alert link ↗'));
           } else {
-            r.appendChild(btn('Open it in the browser to finish', 'small primary', function () {
-              post('retry', { ids: [j.id], mode: 'assist' }).then(function () { toast('Opening the form: check it and click Submit.'); }, fail);
+            r.appendChild(restartButton(j, 'submit', 'Open it in the browser to finish', 'small primary', 'retry', { ids: [j.id], mode: 'assist' }, function () {
+              toast('Opening the form: check it and click Submit.');
             }));
           }
           r.appendChild(appliedButton(j, false));
