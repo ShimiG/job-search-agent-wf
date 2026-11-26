@@ -1,4 +1,5 @@
 import type { Frame, Locator, Page } from 'playwright-core';
+import { FORM_FLAG } from '../design/tokens.ts';
 import { textMentionsTitle } from '../llm/posting.ts';
 import { diceSimilarity, normalizeForMatch } from '../util/text.ts';
 import type { FormField, PlannedAnswer } from './schema.ts';
@@ -321,7 +322,7 @@ export async function highlight(frame: Frame, keys: string[]): Promise<void> {
   if (!keys.length) return;
   await frame
     .evaluate(
-      `(() => { for (const k of ${JSON.stringify(keys)}) for (const el of document.querySelectorAll('[data-ja-key="' + k + '"]')) { el.style.outline = '3px solid #d93025'; el.style.outlineOffset = '2px'; } })()`,
+      `(() => { for (const k of ${JSON.stringify(keys)}) for (const el of document.querySelectorAll('[data-ja-key="' + k + '"]')) { el.style.outline = '3px solid ${FORM_FLAG}'; el.style.outlineOffset = '2px'; } })()`,
     )
     .catch(() => undefined);
 }
