@@ -9,8 +9,8 @@ export const PAGE = String.raw`<!doctype html>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #5f6672; --line: #e3e6eb;
-    --accent: #2f6fec; --accent-text: #ffffff; --good: #1e8a4c; --ok: #0f7f86; --warn: #a86400; --low: #7a808a;
-    --good-bg: #e6f5ec; --ok-bg: #e2f4f5; --warn-bg: #fdf1dc; --low-bg: #eef0f3; --danger: #c23a32; --danger-bg: #fbe7e5;
+    --accent: #2f6fec; --accent-text: #ffffff; --good: #1b7b44; --ok: #0e767d; --warn: #9c5d00; --low: #656a73;
+    --good-bg: #e6f5ec; --ok-bg: #e2f4f5; --warn-bg: #fdf1dc; --low-bg: #eef0f3; --danger: #bc3831; --danger-bg: #fbe7e5;
     --sel: #eaf1ff; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
   }
   @media (prefers-color-scheme: dark) {
