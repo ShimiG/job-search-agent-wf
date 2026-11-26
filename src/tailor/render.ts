@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MasterCv } from '../config.ts';
+import { CV_COLORS, FONTS } from '../design/tokens.ts';
 import { extractPdfText } from './pdf-text.ts';
 import type { CvSection, OutputLanguage, TailorConfig, TailoredContent } from './schema.ts';
 
@@ -39,24 +40,24 @@ const dir = (lang: OutputLanguage) => (lang === 'he' ? 'rtl' : 'ltr');
 const BASE_CSS = `
 @page { size: A4; margin: 15mm 17mm; }
 * { box-sizing: border-box; }
-body { margin: 0; color: #1d1d1f; font: 10.3pt/1.42 "Segoe UI", Arial, "Noto Sans Hebrew", "DejaVu Sans", sans-serif; }
+body { margin: 0; color: ${CV_COLORS.ink}; font: 10.3pt/1.42 ${FONTS.cv}; }
 /* No ligatures or contextual glyph swaps: a font may draw "fi", or a bracket next to a capital, with a
    glyph that has no character behind it, and a parser reading the PDF then gets nothing for it. */
 body { font-variant-ligatures: none; }
 h1 { font-size: 20pt; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.headline { font-size: 11.5pt; color: #3a3a3c; margin: 2px 0 4px; }
-.contact { font-size: 9.3pt; color: #48484a; }
-.contact span + span::before { content: " · "; color: #8e8e93; }
-h2 { font-size: 10pt; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #1f4e79;
-     border-bottom: 1px solid #c7d3e0; padding-bottom: 2px; margin: 14px 0 6px; }
+.headline { font-size: 11.5pt; color: ${CV_COLORS.headline}; margin: 2px 0 4px; }
+.contact { font-size: 9.3pt; color: ${CV_COLORS.meta}; }
+.contact span + span::before { content: " · "; color: ${CV_COLORS.separator}; }
+h2 { font-size: 10pt; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: ${CV_COLORS.heading};
+     border-bottom: 1px solid ${CV_COLORS.rule}; padding-bottom: 2px; margin: 14px 0 6px; }
 .entry { margin-bottom: 8px; break-inside: avoid; }
 .entry-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .entry-title { font-weight: 600; }
-.entry-meta { color: #48484a; font-size: 9.3pt; white-space: nowrap; }
+.entry-meta { color: ${CV_COLORS.meta}; font-size: 9.3pt; white-space: nowrap; }
 ul { margin: 3px 0 0; padding-inline-start: 16px; }
 li { margin: 1px 0; }
 p { margin: 0 0 8px; }
-.muted { color: #48484a; }
+.muted { color: ${CV_COLORS.meta}; }
 .skills { margin: 1px 0; }
 .skills-cat { font-weight: 600; }
 `;

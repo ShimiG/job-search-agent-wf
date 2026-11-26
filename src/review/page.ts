@@ -1,5 +1,8 @@
 // The coordinator page, served by server.ts. Client script is plain JS in a string: no build step.
-// No template literals in the client code: this whole page is one String.raw template.
+// No template literals in the client code: this whole page is one String.raw template. Its only
+// substitutions are the design tokens in the stylesheet (src/design/tokens.ts).
+import { cssVariables, DIALOG_SHADOW, FONTS } from '../design/tokens.ts';
+
 export const PAGE = String.raw`<!doctype html>
 <html lang="en">
 <head>
@@ -7,22 +10,12 @@ export const PAGE = String.raw`<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Search Run</title>
 <style>
-  :root {
-    --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #5f6672; --line: #e3e6eb;
-    --accent: #2f6fec; --accent-text: #ffffff; --good: #1e8a4c; --ok: #0f7f86; --warn: #a86400; --low: #7a808a;
-    --good-bg: #e6f5ec; --ok-bg: #e2f4f5; --warn-bg: #fdf1dc; --low-bg: #eef0f3; --danger: #c23a32; --danger-bg: #fbe7e5;
-    --sel: #eaf1ff; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
-  }
+  :root { ${cssVariables('light')} }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #111317; --card: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --line: #2b3038;
-      --accent: #5b8ff5; --accent-text: #0b0d10; --good: #5cc98a; --ok: #4fc3c9; --warn: #e8a948; --low: #9aa1ad;
-      --good-bg: #173324; --ok-bg: #133234; --warn-bg: #3a2c12; --low-bg: #262a31; --danger: #f07167; --danger-bg: #3a1d1b;
-      --sel: #1d2a44; --shadow: none;
-    }
+    :root { ${cssVariables('dark')} }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Hebrew", sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 ${FONTS.sans}; }
   main { max-width: 940px; margin: 0 auto; padding: 22px 16px 120px; }
   header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
   h1 { font-size: 22px; margin: 0; }
@@ -127,10 +120,10 @@ export const PAGE = String.raw`<!doctype html>
   .role { margin-top: 10px; }
   .role strong { font-weight: 650; }
   .phone { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
-  .phone .qr { background: #fff; padding: 8px; border-radius: 8px; line-height: 0; }
+  .phone .qr { background: #fff; /* white in both themes: phones only scan dark-on-light */ padding: 8px; border-radius: 8px; line-height: 0; }
   .phone .qr svg { width: 200px; height: 200px; }
   .phone code { font-size: 12px; word-break: break-all; }
-  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 18px; width: min(600px, calc(100% - 32px)); box-shadow: 0 12px 40px rgba(0, 0, 0, .25); }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); padding: 18px; width: min(600px, calc(100% - 32px)); box-shadow: ${DIALOG_SHADOW}; }
   dialog::backdrop { background: rgba(0, 0, 0, .4); }
   dialog h2 { font-size: 18px; margin: 0 0 4px; }
   dialog label { display: block; font-weight: 600; font-size: 14px; margin-top: 12px; }
